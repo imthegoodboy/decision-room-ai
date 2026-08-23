@@ -1,0 +1,38 @@
+{
+  "schema": 2,
+  "permissions": ["tools.invoke", "storage.read", "storage.write"],
+  "required_executas": [
+    {
+      "tool_id": "tool-dev-decision-room-ai"
+    }
+  ],
+  "tags": ["decision-room-ai"],
+  "ui": {
+    "bundle": {
+      "format": "static-spa",
+      "entry": "index.html",
+      "external_origins": []
+    },
+    "views": [
+      {
+        "name": "main",
+        "title": "decision-room-ai",
+        "default": true,
+        "default_size": { "w": 480, "h": 360 },
+        "min_size": { "w": 320, "h": 240 }
+      }
+    ],
+    "host_api": {
+      "tools": ["tool-dev-decision-room-ai"],
+      "storage": ["get", "set"],
+      "window": ["set_title", "ready"]
+    },
+    "csp_overrides": {},
+    "state_merge": "last_writer_wins"
+  },
+  "dev": {
+    "fixtures": ["fixtures/*.jsonl"],
+    "seed_storage": {},
+    "user_id": 1
+  }
+}
