@@ -1,12 +1,11 @@
 {
   "schema": 2,
-  "permissions": ["tools.invoke", "storage.read", "storage.write"],
-  "required_executas": [
-    {
-      "tool_id": "tool-dev-decision-room-ai"
-    }
-  ],
-  "tags": ["decision-room-ai"],
+  "permissions": ["llm.complete", "storage.read", "storage.write"],
+  "host_capabilities": ["llm.complete", "aps.kv"],
+  "required_executas": [],
+  "optional_executas": [],
+  "system_prompt_addendum": "Decision Room AI is a structured decision workspace. Help users surface options, criteria, uncertainty, assumptions, risks, and reversible next steps. Treat calculated scores as decision support, not objective truth. Never invent research, consensus, collaborators, outcomes, or a decision the user did not record.",
+  "tags": ["decisions", "planning", "strategy", "productivity", "analysis"],
   "ui": {
     "bundle": {
       "format": "static-spa",
@@ -16,18 +15,26 @@
     "views": [
       {
         "name": "main",
-        "title": "decision-room-ai",
+        "title": "Decision Room AI",
         "default": true,
-        "default_size": { "w": 480, "h": 360 },
-        "min_size": { "w": 320, "h": 240 }
+        "entry": "index.html",
+        "default_size": { "w": 1200, "h": 820 },
+        "min_size": { "w": 320, "h": 520 },
+        "max_size": { "w": 1680, "h": 1200 },
+        "resizable": true,
+        "movable": true,
+        "single_instance": true,
+        "summary_template": "Structured workspace for the active decision, comparison, risks, and commitment"
       }
     ],
     "host_api": {
-      "tools": ["tool-dev-decision-room-ai"],
-      "storage": ["get", "set"],
+      "llm": ["complete"],
+      "storage": ["get", "set", "delete", "list"],
       "window": ["set_title", "ready"]
     },
-    "csp_overrides": {},
+    "csp_overrides": {
+      "script-src": ["'self'"]
+    },
     "state_merge": "last_writer_wins"
   },
   "dev": {

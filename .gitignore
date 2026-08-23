@@ -1,0 +1,9 @@
+.anna/
+node_modules/
+test-results/
+playwright-report/
+output/
+listing-assets/*.tmp.png
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,24 @@
+{
+  "name": "decision-room-ai",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Decision Room AI for Anna",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.js",
+    "test:e2e": "playwright test",
+    "test:e2e:live": "playwright test --config playwright.live.config.js",
+    "check": "npm run build && npm test && anna-app validate --strict",
+    "verify": "npm run check && npm run test:e2e"
+  },
+  "dependencies": {
+    "@fontsource-variable/manrope": "^5.2.8",
+    "@fontsource-variable/newsreader": "^5.2.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "axe-core": "^4.10.3",
+    "esbuild": "^0.25.9"
+  }
+}

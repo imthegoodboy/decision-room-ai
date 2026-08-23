@@ -1,0 +1,507 @@
+export const STORE_KEY = "decision-room:v1:workspace";
+export const STORE_VERSION = 1;
+export const MAX_DECISIONS = 24;
+export const MAX_OPTIONS = 6;
+export const MAX_CRITERIA = 8;
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, Number(value) || 0));
+const clean = (value, max = 240) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+const cleanLong = (value, max = 4000) => String(value ?? "").trim().slice(0, max);
+
+export function createId(prefix = "item") {
+  const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${random}`;
+}
+
+export const TEMPLATES = {
+  blank: {
+    name: "Start from scratch",
+    eyebrow: "Open canvas",
+    prompt: "What decision are you facing?",
+    options: ["Option A", "Option B"],
+    criteria: [
+      ["Expected impact", 30],
+      ["Practical fit", 25],
+      ["Cost and effort", 20],
+      ["Reversibility", 15],
+      ["Personal alignment", 10],
+    ],
+  },
+  career: {
+    name: "Career move",
+    eyebrow: "Work & growth",
+    prompt: "Which career path should I choose?",
+    options: ["New opportunity", "Current path"],
+    criteria: [
+      ["Learning and growth", 30],
+      ["Role fit", 25],
+      ["Total reward", 20],
+      ["People and culture", 15],
+      ["Life flexibility", 10],
+    ],
+  },
+  purchase: {
+    name: "Major purchase",
+    eyebrow: "Spend deliberately",
+    prompt: "Which option gives me the best long-term value?",
+    options: ["Leading option", "Alternative"],
+    criteria: [
+      ["Real-world fit", 30],
+      ["Long-term value", 25],
+      ["Reliability", 20],
+      ["Upfront cost", 15],
+      ["Resale or exit", 10],
+    ],
+  },
+  move: {
+    name: "Where to live",
+    eyebrow: "Place & lifestyle",
+    prompt: "Where should I live next?",
+    options: ["Location A", "Location B"],
+    criteria: [
+      ["Quality of daily life", 30],
+      ["Opportunity", 25],
+      ["Affordability", 20],
+      ["Community", 15],
+      ["Access and mobility", 10],
+    ],
+  },
+  venture: {
+    name: "Startup idea",
+    eyebrow: "Build or pass",
+    prompt: "Which opportunity should we pursue?",
+    options: ["Idea A", "Idea B"],
+    criteria: [
+      ["Problem strength", 25],
+      ["Distribution advantage", 25],
+      ["Ability to execute", 20],
+      ["Economic potential", 20],
+      ["Learning value", 10],
+    ],
+  },
+  hire: {
+    name: "Hiring choice",
+    eyebrow: "People decision",
+    prompt: "Who is the strongest fit for this role?",
+    options: ["Candidate A", "Candidate B"],
+    criteria: [
+      ["Role evidence", 30],
+      ["Problem-solving", 25],
+      ["Team contribution", 20],
+      ["Growth capacity", 15],
+      ["Practical constraints", 10],
+    ],
+  },
+};
+
+export function createDecision(input = {}, now = new Date()) {
+  const template = TEMPLATES[input.template] || TEMPLATES.blank;
+  const id = createId("decision");
+  const options = template.options.map((name) => ({ id: createId("option"), name, notes: "" }));
+  const criteria = template.criteria.map(([name, weight]) => ({
+    id: createId("criterion"),
+    name,
+    weight,
+    description: "",
+  }));
+  const ratings = Object.fromEntries(options.map((option) => [
+    option.id,
+    Object.fromEntries(criteria.map((criterion) => [criterion.id, 3])),
+  ]));
+  const evidence = Object.fromEntries(options.map((option) => [
+    option.id,
+    Object.fromEntries(criteria.map((criterion) => [criterion.id, ""])),
+  ]));
+  const timestamp = now.toISOString();
+  return {
+    id,
+    title: clean(input.title || template.prompt, 140),
+    context: cleanLong(input.context, 2400),
+    mode: input.mode === "quick" ? "quick" : "deep",
+    template: Object.hasOwn(TEMPLATES, input.template) ? input.template : "blank",
+    status: "draft",
+    deadline: clean(input.deadline, 20),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    options,
+    criteria,
+    ratings,
+    evidence,
+    assumptions: [],
+    risks: [],
+    analyses: [],
+    coach: [],
+    commitment: null,
+    outcome: null,
+  };
+}
+
+export function normalizeDecision(raw, now = new Date()) {
+  if (!raw || typeof raw !== "object") return null;
+  const fallback = createDecision({ title: raw.title || "Untitled decision" }, now);
+  const options = Array.isArray(raw.options) ? raw.options.slice(0, MAX_OPTIONS).map((option, index) => ({
+    id: clean(option?.id, 100) || `option-${index + 1}`,
+    name: clean(option?.name, 100) || `Option ${index + 1}`,
+    notes: cleanLong(option?.notes, 1800),
+  })) : fallback.options;
+  while (options.length < 2) options.push({ id: createId("option"), name: `Option ${options.length + 1}`, notes: "" });
+
+  const criteria = Array.isArray(raw.criteria) ? raw.criteria.slice(0, MAX_CRITERIA).map((criterion, index) => ({
+    id: clean(criterion?.id, 100) || `criterion-${index + 1}`,
+    name: clean(criterion?.name, 100) || `Criterion ${index + 1}`,
+    weight: clamp(criterion?.weight ?? 10, 1, 100),
+    description: clean(criterion?.description, 300),
+  })) : fallback.criteria;
+  while (criteria.length < 2) criteria.push({ id: createId("criterion"), name: `Criterion ${criteria.length + 1}`, weight: 10, description: "" });
+
+  const ratings = {};
+  const evidence = {};
+  for (const option of options) {
+    ratings[option.id] = {};
+    evidence[option.id] = {};
+    for (const criterion of criteria) {
+      ratings[option.id][criterion.id] = clamp(raw.ratings?.[option.id]?.[criterion.id] ?? 3, 1, 5);
+      evidence[option.id][criterion.id] = cleanLong(raw.evidence?.[option.id]?.[criterion.id], 800);
+    }
+  }
+
+  const assumptions = Array.isArray(raw.assumptions) ? raw.assumptions.slice(0, 16).map((item) => ({
+    id: clean(item?.id, 100) || createId("assumption"),
+    text: clean(item?.text, 500),
+    confidence: clamp(item?.confidence ?? 3, 1, 5),
+    evidence: clean(item?.evidence, 600),
+  })).filter((item) => item.text) : [];
+
+  const risks = Array.isArray(raw.risks) ? raw.risks.slice(0, 16).map((item) => ({
+    id: clean(item?.id, 100) || createId("risk"),
+    optionId: options.some((option) => option.id === item?.optionId) ? item.optionId : options[0].id,
+    text: clean(item?.text, 500),
+    likelihood: clamp(item?.likelihood ?? 3, 1, 5),
+    impact: clamp(item?.impact ?? 3, 1, 5),
+    mitigation: clean(item?.mitigation, 600),
+  })).filter((item) => item.text) : [];
+
+  const analyses = Array.isArray(raw.analyses) ? raw.analyses.slice(-8).map(normalizeAnalysis).filter(Boolean) : [];
+  const coach = Array.isArray(raw.coach) ? raw.coach.slice(-24).map((message) => ({
+    id: clean(message?.id, 100) || createId("message"),
+    role: message?.role === "assistant" ? "assistant" : "user",
+    text: cleanLong(message?.text, message?.role === "assistant" ? 4000 : 1200),
+    source: message?.role === "assistant" && message?.source === "local" ? "local" : "anna",
+    createdAt: clean(message?.createdAt, 40) || now.toISOString(),
+  })).filter((message) => message.text) : [];
+  const optionIds = new Set(options.map((option) => option.id));
+  const commitment = raw.commitment && optionIds.has(raw.commitment.optionId) ? {
+    optionId: raw.commitment.optionId,
+    confidence: clamp(raw.commitment.confidence ?? 3, 1, 5),
+    rationale: cleanLong(raw.commitment.rationale, 1800),
+    nextAction: clean(raw.commitment.nextAction, 500),
+    reviewDate: clean(raw.commitment.reviewDate, 20),
+    decidedAt: clean(raw.commitment.decidedAt, 40) || now.toISOString(),
+  } : null;
+  const outcome = raw.outcome ? {
+    result: cleanLong(raw.outcome.result, 1800),
+    score: clamp(raw.outcome.score ?? 3, 1, 5),
+    lesson: cleanLong(raw.outcome.lesson, 1400),
+    reviewedAt: clean(raw.outcome.reviewedAt, 40) || now.toISOString(),
+  } : null;
+
+  return {
+    ...fallback,
+    id: clean(raw.id, 100) || fallback.id,
+    title: clean(raw.title, 140) || "Untitled decision",
+    context: cleanLong(raw.context, 2400),
+    mode: raw.mode === "quick" ? "quick" : "deep",
+    template: Object.hasOwn(TEMPLATES, raw.template) ? raw.template : "blank",
+    status: outcome ? "reviewed" : commitment ? "decided" : "draft",
+    deadline: clean(raw.deadline, 20),
+    createdAt: clean(raw.createdAt, 40) || fallback.createdAt,
+    updatedAt: clean(raw.updatedAt, 40) || fallback.updatedAt,
+    options,
+    criteria,
+    ratings,
+    evidence,
+    assumptions,
+    risks,
+    analyses,
+    coach,
+    commitment,
+    outcome,
+  };
+}
+
+export function normalizeStore(raw) {
+  const decisions = Array.isArray(raw?.decisions)
+    ? raw.decisions.map((decision) => normalizeDecision(decision)).filter(Boolean).slice(0, MAX_DECISIONS)
+    : [];
+  return {
+    version: STORE_VERSION,
+    decisions,
+    preferences: {
+      reduceMotion: Boolean(raw?.preferences?.reduceMotion),
+      compactMatrix: Boolean(raw?.preferences?.compactMatrix),
+    },
+  };
+}
+
+export function calculateScores(decision) {
+  if (!decision?.options?.length || !decision?.criteria?.length) return [];
+  const totalWeight = decision.criteria.reduce((sum, criterion) => sum + clamp(criterion.weight, 1, 100), 0) || 1;
+  return decision.options.map((option) => {
+    const contributions = decision.criteria.map((criterion) => {
+      const rating = clamp(decision.ratings?.[option.id]?.[criterion.id] ?? 3, 1, 5);
+      const points = (rating / 5) * (criterion.weight / totalWeight) * 100;
+      return { criterionId: criterion.id, name: criterion.name, rating, points };
+    });
+    const score = contributions.reduce((sum, item) => sum + item.points, 0);
+    const evidenceCount = decision.criteria.filter((criterion) => cleanLong(decision.evidence?.[option.id]?.[criterion.id]).length >= 8).length;
+    return {
+      optionId: option.id,
+      name: option.name,
+      score: Math.round(score * 10) / 10,
+      evidenceCoverage: Math.round((evidenceCount / decision.criteria.length) * 100),
+      contributions: contributions.sort((a, b) => b.points - a.points),
+    };
+  }).sort((a, b) => b.score - a.score);
+}
+
+export function confidenceLens(decision) {
+  const scores = calculateScores(decision);
+  const first = scores[0];
+  const second = scores[1];
+  const gap = first && second ? Math.round((first.score - second.score) * 10) / 10 : 0;
+  const evidenceCoverage = scores.length
+    ? Math.round(scores.reduce((sum, option) => sum + option.evidenceCoverage, 0) / scores.length)
+    : 0;
+  const assumptionConfidence = decision.assumptions.length
+    ? Math.round((decision.assumptions.reduce((sum, item) => sum + item.confidence, 0) / (decision.assumptions.length * 5)) * 100)
+    : 50;
+  const riskLoad = decision.risks.reduce((sum, risk) => sum + risk.likelihood * risk.impact, 0);
+  const readiness = Math.round(clamp(
+    evidenceCoverage * 0.45 + assumptionConfidence * 0.25 + Math.min(gap * 3, 30) - Math.min(riskLoad, 25) * 0.2 + 15,
+    0,
+    100,
+  ));
+  let label = "Fragile";
+  if (readiness >= 76) label = "Well supported";
+  else if (readiness >= 56) label = "Promising";
+  else if (readiness >= 36) label = "Still uncertain";
+  return { readiness, label, gap, evidenceCoverage, assumptionConfidence, riskLoad, leader: first || null };
+}
+
+export function sensitivityAnalysis(decision) {
+  const base = calculateScores(decision);
+  if (base.length < 2) return { stable: true, switches: [], summary: "Add at least two options to test sensitivity." };
+  const leaderId = base[0].optionId;
+  const switches = [];
+  for (const criterion of decision.criteria) {
+    for (const delta of [-20, -10, 10, 20]) {
+      const clone = structuredClone(decision);
+      const target = clone.criteria.find((item) => item.id === criterion.id);
+      target.weight = clamp(target.weight + delta, 1, 100);
+      const result = calculateScores(clone);
+      if (result[0]?.optionId !== leaderId) {
+        switches.push({
+          criterionId: criterion.id,
+          criterion: criterion.name,
+          delta,
+          newLeader: result[0].name,
+          score: result[0].score,
+        });
+        break;
+      }
+    }
+  }
+  const sorted = switches.sort((a, b) => Math.abs(a.delta) - Math.abs(b.delta));
+  return {
+    stable: sorted.length === 0,
+    switches: sorted,
+    summary: sorted.length
+      ? `${sorted[0].criterion} is the nearest weight change that could alter the current leader.`
+      : "The current leader survives a ±20 weight test across every criterion.",
+  };
+}
+
+export function normalizeAnalysis(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const list = (value, max = 8) => Array.isArray(value) ? value.slice(0, max).map((item) => clean(item, 600)).filter(Boolean) : [];
+  return {
+    id: clean(raw.id, 100) || createId("analysis"),
+    type: ["challenger", "premortem", "scenarios", "advisor"].includes(raw.type) ? raw.type : "advisor",
+    source: raw.source === "local" ? "local" : "anna",
+    createdAt: clean(raw.createdAt, 40) || new Date().toISOString(),
+    headline: clean(raw.headline, 220) || "A clearer view of the decision",
+    summary: cleanLong(raw.summary, 1800),
+    blindSpots: list(raw.blindSpots),
+    questions: list(raw.questions),
+    scenarios: list(raw.scenarios),
+    experiments: list(raw.experiments),
+    recommendation: cleanLong(raw.recommendation, 1200),
+    caveat: cleanLong(raw.caveat, 700),
+  };
+}
+
+export function buildFallbackAnalysis(decision, type = "advisor") {
+  const scores = calculateScores(decision);
+  const lens = confidenceLens(decision);
+  const sensitivity = sensitivityAnalysis(decision);
+  const leader = scores[0];
+  const runnerUp = scores[1];
+  const weakestEvidence = scores.slice().sort((a, b) => a.evidenceCoverage - b.evidenceCoverage)[0];
+  const topCriterion = decision.criteria.slice().sort((a, b) => b.weight - a.weight)[0];
+  const gapText = leader && runnerUp ? `${leader.name} leads ${runnerUp.name} by ${lens.gap} points` : "the current room does not yet have a comparable runner-up";
+  const modeHeadlines = {
+    challenger: lens.gap <= 3 ? "The current ranking is too close to carry the decision." : "The leader still depends on untested judgment.",
+    premortem: "The most preventable failure is treating an assumption as evidence.",
+    scenarios: "The ranking changes meaning when the important assumptions change.",
+    advisor: "Reduce one important uncertainty before you commit.",
+  };
+  const blindSpots = [];
+  if (lens.evidenceCoverage < 60) blindSpots.push(`Only ${lens.evidenceCoverage}% of rating cells have supporting notes; the remaining scores are judgments without recorded evidence.`);
+  if (!decision.assumptions.length) blindSpots.push("No assumptions are recorded, so the beliefs underneath the ratings are still hidden.");
+  if (!decision.risks.length) blindSpots.push("No risks are recorded for the options, which makes downside comparisons incomplete.");
+  if (decision.options.length === 2) blindSpots.push("The room contains only two options; a hybrid, delay, or small pilot may be missing.");
+  if (!blindSpots.length) blindSpots.push(`The least-supported option is ${weakestEvidence?.name || "not yet identifiable"} at ${weakestEvidence?.evidenceCoverage || 0}% evidence coverage.`);
+
+  return normalizeAnalysis({
+    source: "local",
+    type,
+    headline: modeHeadlines[type] || modeHeadlines.advisor,
+    summary: `${gapText}, with ${lens.evidenceCoverage}% average evidence coverage. This local fallback reads only the scores, notes, assumptions, and risks saved in this room.`,
+    blindSpots,
+    questions: [topCriterion ? `What observable evidence would justify the current ${topCriterion.name} ratings?` : "What fact would most change the current ranking?"],
+    scenarios: [
+      "Best case: the leading option delivers its highest-weighted benefits and the recorded risks remain manageable.",
+      "Expected case: the trade-offs remain mixed and the decision depends on which uncertainty you test first.",
+      "Difficult case: a low-confidence assumption fails and the most exposed option becomes harder to reverse.",
+    ],
+    experiments: [
+      topCriterion && leader ? `Run one small test that produces evidence for ${leader.name} on ${topCriterion.name}.` : "Add one evidence note to each option before rescoring.",
+      sensitivity.stable ? "Ask what new fact—not another weight adjustment—could change the leader." : `Revisit ${sensitivity.switches[0]?.criterion || "the most sensitive criterion"}, because a practical weight change can alter the leader.`,
+    ],
+    recommendation: leader ? `Treat ${leader.name} as a working hypothesis, not a verdict. Test the highest-impact uncertainty, record what you learn, and then rescore before committing.` : "Complete the option comparison, record evidence, and test one important uncertainty before committing.",
+    caveat: "This fallback uses no external research and cannot verify the accuracy of the user-supplied ratings or notes.",
+  });
+}
+
+export function buildFallbackCoachResponse(decision, question) {
+  const lens = confidenceLens(decision);
+  const sensitivity = sensitivityAnalysis(decision);
+  const leader = lens.leader?.name || "the current leader";
+  const prompt = String(question || "").toLowerCase();
+  const prefix = "Anna’s live reply was unavailable, so this is a local read of the information already in your room.";
+  if (prompt.includes("assumption")) {
+    const lowest = decision.assumptions.slice().sort((a, b) => a.confidence - b.confidence)[0];
+    return `${prefix}\n\n${lowest ? `Test “${lowest.text}” first because it has the lowest recorded confidence (${lowest.confidence}/5).` : "Start by writing the belief that would most weaken the leading option if it proved false."} Choose one observable result that would raise or lower your confidence.`;
+  }
+  if (prompt.includes("revers")) {
+    return `${prefix}\n\nMake the next step smaller than the final commitment: run a time-boxed trial, request concrete evidence, or delay only long enough to test the highest-weighted criterion. The goal is to learn before the expensive part becomes irreversible.`;
+  }
+  if (prompt.includes("rational") || prompt.includes("bias")) {
+    return `${prefix}\n\n${leader} currently leads by ${lens.gap} points with ${lens.evidenceCoverage}% evidence coverage. Ask which rating you would defend differently if the option names were hidden; that is the first place to look for motivated reasoning.`;
+  }
+  if (prompt.includes("missing") || prompt.includes("option")) {
+    return `${prefix}\n\nTest whether the room is forcing a false either/or. Consider a pilot, a negotiated variant, a deliberate delay with a deadline, or a combination that preserves the strongest benefit of each option.`;
+  }
+  return `${prefix}\n\n${leader} currently leads by ${lens.gap} points, and the room is ${sensitivity.stable ? "stable under the weight test" : "sensitive to at least one criterion weight"}. The most useful next move is to add evidence where coverage is weakest, then rescore and see whether the ranking survives.`;
+}
+
+export function parseStructuredJson(text) {
+  const cleaned = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  const first = cleaned.indexOf("{");
+  const last = cleaned.lastIndexOf("}");
+  if (first < 0 || last <= first) throw new Error("Anna returned analysis in an unreadable format.");
+  return JSON.parse(cleaned.slice(first, last + 1));
+}
+
+export function formatCoachResponse(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return "I could not form a useful response from that result. Try asking one narrower question.";
+  try {
+    const parsed = parseStructuredJson(raw);
+    const sections = [
+      parsed.summary,
+      parsed.recommendation,
+      Array.isArray(parsed.questions) ? parsed.questions[0] : "",
+    ].map((value) => cleanLong(value, 1600)).filter(Boolean);
+    if (sections.length) return sections.join("\n\n").slice(0, 4000);
+  } catch {
+    // Normal Coach responses are plain text. JSON parsing is only a compatibility
+    // path for older Anna mock fixtures that match the wrong LLM response.
+  }
+  return raw.slice(0, 4000);
+}
+
+export function buildAnalysisPrompt(decision, type) {
+  const scores = calculateScores(decision);
+  const analysisLabels = {
+    challenger: "CHALLENGER — challenge framing, ratings, biases, and missing options",
+    premortem: "PREMORTEM — imagine the chosen path failed and identify preventable causes",
+    scenarios: "SCENARIOS — explore best, expected, and difficult futures without false precision",
+    advisor: "ADVISOR — synthesize the evidence and propose reversible next steps",
+  };
+  const evidenceLines = [];
+  for (const option of decision.options) {
+    for (const criterion of decision.criteria) {
+      const note = cleanLong(decision.evidence?.[option.id]?.[criterion.id], 500);
+      if (note) evidenceLines.push(`- ${option.name} / ${criterion.name}: ${note}`);
+    }
+  }
+  return `ANALYSIS MODE: ${analysisLabels[type] || analysisLabels.advisor}\n\nDECISION\n${decision.title}\n\nCONTEXT\n${decision.context || "No additional context provided."}\n\nOPTIONS AND CURRENT SCORES\n${scores.map((item) => `- ${item.name}: ${item.score}/100; evidence coverage ${item.evidenceCoverage}%`).join("\n")}\n\nCRITERIA\n${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}\n\nEVIDENCE NOTES\n${evidenceLines.join("\n") || "No evidence notes recorded yet."}\n\nASSUMPTIONS\n${decision.assumptions.map((item) => `- ${item.text} (confidence ${item.confidence}/5)`).join("\n") || "None recorded."}\n\nRISKS\n${decision.risks.map((item) => `- ${item.text} (likelihood ${item.likelihood}/5, impact ${item.impact}/5)`).join("\n") || "None recorded."}\n\nReturn exactly one JSON object with this shape:\n{\n  "headline": "specific insight, not a generic title",\n  "summary": "concise evidence-aware synthesis",\n  "blindSpots": ["missing fact, bias, or assumption"],\n  "questions": ["high-value question to answer next"],\n  "scenarios": ["scenario and what would make it more likely"],\n  "experiments": ["small reversible action that reduces uncertainty"],\n  "recommendation": "conditional recommendation that names the evidence behind it",\n  "caveat": "what the available information cannot establish"\n}\nUse only the user's supplied decision data. Treat scores as subjective inputs, not facts. Never claim external research or certainty. Return JSON only.`;
+}
+
+export function buildCoachPrompt(decision, question) {
+  const scores = calculateScores(decision);
+  const recentCoach = decision.coach.slice(-8).map((message) => `${message.role === "assistant" ? "COACH" : "USER"}: ${message.text}`).join("\n");
+  return `ACTIVE DECISION\n${decision.title}\n\nCONTEXT\n${decision.context || "No additional context provided."}\n\nOPTIONS AND SCORES\n${scores.map((item) => `- ${item.name}: ${item.score}/100, ${item.evidenceCoverage}% evidence coverage`).join("\n")}\n\nCRITERIA\n${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}\n\nASSUMPTIONS\n${decision.assumptions.map((item) => `- ${item.text} (${item.confidence}/5 confidence)`).join("\n") || "None recorded."}\n\nRISKS\n${decision.risks.map((item) => `- ${item.text} (${item.likelihood}×${item.impact})`).join("\n") || "None recorded."}\n\nRECENT CONVERSATION\n${recentCoach || "This is the first message."}\n\nUSER QUESTION\n${cleanLong(question, 1200)}\n\nAnswer as a concise decision coach. Ground every specific observation in the supplied decision. Distinguish the user's evidence from your inference. Ask at most one sharp follow-up question. Do not claim external research, do not make the decision for the user, and do not output JSON.`;
+}
+
+export function decisionProgress(decision) {
+  let completed = 1;
+  if (decision.options.length >= 2 && decision.options.every((option) => option.name.trim())) completed += 1;
+  if (decision.criteria.length >= 2) completed += 1;
+  if (calculateScores(decision).some((score) => score.evidenceCoverage > 0)) completed += 1;
+  if (decision.analyses.length || decision.assumptions.length || decision.risks.length) completed += 1;
+  if (decision.commitment) completed += 1;
+  if (decision.outcome) completed += 1;
+  return Math.round((completed / 7) * 100);
+}
+
+export function duplicateDecision(decision, now = new Date()) {
+  const copy = normalizeDecision(structuredClone(decision), now);
+  const ids = new Map();
+  copy.id = createId("decision");
+  copy.title = `${copy.title} — copy`.slice(0, 140);
+  copy.createdAt = now.toISOString();
+  copy.updatedAt = copy.createdAt;
+  copy.status = "draft";
+  copy.commitment = null;
+  copy.outcome = null;
+  copy.analyses = [];
+  copy.coach = [];
+  copy.options = copy.options.map((option) => {
+    const id = createId("option");
+    ids.set(option.id, id);
+    return { ...option, id };
+  });
+  const criterionIds = new Map();
+  copy.criteria = copy.criteria.map((criterion) => {
+    const id = createId("criterion");
+    criterionIds.set(criterion.id, id);
+    return { ...criterion, id };
+  });
+  copy.ratings = {};
+  copy.evidence = {};
+  for (const oldOption of decision.options) {
+    const newOptionId = ids.get(oldOption.id);
+    copy.ratings[newOptionId] = {};
+    copy.evidence[newOptionId] = {};
+    for (const oldCriterion of decision.criteria) {
+      const newCriterionId = criterionIds.get(oldCriterion.id);
+      copy.ratings[newOptionId][newCriterionId] = decision.ratings?.[oldOption.id]?.[oldCriterion.id] ?? 3;
+      copy.evidence[newOptionId][newCriterionId] = decision.evidence?.[oldOption.id]?.[oldCriterion.id] ?? "";
+    }
+  }
+  copy.assumptions = copy.assumptions.map((item) => ({ ...item, id: createId("assumption") }));
+  copy.risks = copy.risks.map((item) => ({ ...item, id: createId("risk"), optionId: ids.get(item.optionId) || copy.options[0].id }));
+  return copy;
+}
