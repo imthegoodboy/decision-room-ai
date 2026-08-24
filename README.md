@@ -1,5 +1,7 @@
 # Decision Room AI
 
+Public source: https://github.com/imthegoodboy/decision-room-ai
+
 Decision Room AI is a structured decision-making workspace for Anna. It helps
 people frame a consequential choice, compare options against weighted criteria,
 challenge their assumptions with Anna's LLM, commit deliberately, and review the
@@ -55,3 +57,7 @@ This uses the signed-in Anna account and therefore is intentionally excluded
 from the default deterministic test suite.
 
 See `DEPLOY.md` for the release checklist.
+
+Anna app identity: `decision-room-ai`, version `1.0.0`, app id `218`. The build
+is installed and fully tested on the owner account and is currently awaiting
+Anna's store review before public release.
