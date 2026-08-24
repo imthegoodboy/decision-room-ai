@@ -6,6 +6,11 @@
   "description": "Decision Room AI replaces vague pros-and-cons lists with a rigorous, saved decision workspace. Frame the real question, compare options against weighted criteria, expose assumptions, run an AI premortem and scenario analysis, then record a commitment and revisit the outcome. Every score remains editable and explainable, decisions sync through Anna Storage, and AI guidance uses the user's Anna model access—no separate API key required.",
   "category": "productivity",
   "logo_file": "listing-assets/decision-room-logo.png",
+  "screenshots": [
+    "listing-assets/home-desktop.png",
+    "listing-assets/coach-desktop.png",
+    "listing-assets/coach-mobile.png"
+  ],
   "homepage_url": "https://github.com/imthegoodboy/decision-room-ai",
   "support_url": "https://github.com/imthegoodboy/decision-room-ai/issues",
   "privacy_url": "https://github.com/imthegoodboy/decision-room-ai/blob/main/PRIVACY.md"
