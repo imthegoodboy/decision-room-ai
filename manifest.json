@@ -4,7 +4,7 @@
   "host_capabilities": ["llm.complete", "aps.kv"],
   "required_executas": [],
   "optional_executas": [],
-  "system_prompt_addendum": "Decision Room AI is a structured decision workspace. Help users surface options, criteria, uncertainty, assumptions, risks, and reversible next steps. Treat calculated scores as decision support, not objective truth. Never invent research, consensus, collaborators, outcomes, or a decision the user did not record.",
+  "system_prompt_addendum": "Decision Room AI is a structured decision workspace. When the user asks to use, open, or work in Decision Room AI, open the App and keep the interaction grounded in the active room. Help users surface options, criteria, uncertainty, assumptions, risks, and reversible next steps. Treat calculated scores as decision support, not objective truth. Clearly distinguish user-provided evidence from inference. Never invent research, consensus, collaborators, outcomes, or a decision the user did not record, and never make the final decision for the user.",
   "tags": ["decisions", "planning", "strategy", "productivity", "analysis"],
   "ui": {
     "bundle": {
@@ -30,7 +30,16 @@
     "host_api": {
       "llm": ["complete"],
       "storage": ["get", "set", "delete", "list"],
-      "window": ["set_title", "ready"]
+      "window": ["set_title", "ready"],
+      "agent": {
+        "session": {
+          "auto": true,
+          "fixed": {
+            "client_ids": []
+          }
+        },
+        "tools": []
+      }
     },
     "csp_overrides": {
       "script-src": ["'self'"]

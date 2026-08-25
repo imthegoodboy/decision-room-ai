@@ -20,8 +20,10 @@ Frame the decision
 
 The scoring engine is deterministic and fully editable. Anna's LLM adds a
 separate advisory layer; it never silently changes scores or makes the final
-choice. Personal decisions are stored in Anna Storage and fall back to the
-current browser only when previewed outside Anna.
+choice. Personal decisions are stored in bounded Anna Storage shards and fall
+back to the current browser only when previewed outside Anna. Existing
+single-key workspaces migrate automatically, while the shard layout prevents a
+large decision library from exceeding Anna's per-value storage limit.
 
 Release-one features include six decision templates, weighted comparison,
 evidence notes, sensitivity and readiness lenses, assumption/risk registers,
@@ -38,7 +40,7 @@ npm install
 npm run build
 npm test
 anna-app validate --strict
-anna-app dev --port 5187 --llm-account https://anna.partners
+anna-app dev --port 5187 --slug decision-room-ai --llm-app-slug decision-room-ai --storage aps --llm-account https://anna.partners
 ```
 
 Run browser acceptance in a second terminal:
@@ -58,6 +60,5 @@ from the default deterministic test suite.
 
 See `DEPLOY.md` for the release checklist.
 
-Anna app identity: `decision-room-ai`, version `1.0.0`, app id `218`. The build
-is installed and fully tested on the owner account and is currently awaiting
-Anna's store review before public release.
+Anna app identity: `decision-room-ai`, version `1.0.1`, app id `218`. See
+`DEPLOY.md` for the exact installed candidate and Marketplace review state.

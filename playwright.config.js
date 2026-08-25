@@ -12,7 +12,7 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: "anna-app dev --port 5196 --mock-llm fixtures/decision-analysis.jsonl",
+    command: "anna-app dev --port 5196 --slug decision-room-ai --mock-llm fixtures/decision-analysis.jsonl",
     url: "http://127.0.0.1:5196/",
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,

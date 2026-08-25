@@ -273,14 +273,19 @@ function templateIcon(key) {
 
 function renderNew() {
   return shell(`<div class="page page--new">
-    <header class="new-intro reveal"><a class="text-link" href="#/home">${icon("arrow", "icon--back")} Back to decisions</a><p class="eyebrow">Open a decision room</p><h1>First, name the<br><em>real choice.</em></h1><p>Start with a proven frame or keep the canvas open. Everything stays editable.</p></header>
+    <header class="new-intro reveal"><a class="text-link" href="#/home">${icon("arrow", "icon--back")} Back to decisions</a><p class="eyebrow">Open a decision room</p><h1>First, name the<br><em>real choice.</em></h1><p>One clear question is enough. Compare the real options, ask Anna to challenge the evidence, then record a decision you can revisit.</p></header>
     <form id="new-decision-form" class="new-composer reveal">
       <fieldset class="template-fieldset"><legend>Choose a starting frame</legend><div class="template-grid">${Object.entries(TEMPLATES).map(([key, template]) => `<label class="template-choice ${state.selectedTemplate === key ? "is-selected" : ""}"><input type="radio" name="template" value="${key}" ${state.selectedTemplate === key ? "checked" : ""}><span class="template-mark">${templateIcon(key)}</span><span><small>${escapeHtml(template.eyebrow)}</small><strong>${escapeHtml(template.name)}</strong></span></label>`).join("")}</div></fieldset>
       <div class="composer-core">
-        <label class="field field--hero"><span>What decision are you facing?</span><textarea name="title" id="new-title" rows="2" maxlength="140" required placeholder="${attr(TEMPLATES[state.selectedTemplate].prompt)}"></textarea></label>
-        <label class="field"><span>What context should the room understand?</span><textarea name="context" rows="4" maxlength="2400" placeholder="What changed, what is at stake, and what constraints matter?"></textarea></label>
-        <div class="composer-row"><fieldset class="mode-switch"><legend>Depth</legend><label><input type="radio" name="mode" value="quick"><span>Quick</span></label><label><input type="radio" name="mode" value="deep" checked><span>Deep</span></label></fieldset><label class="field field--date"><span>Decision date <small>Optional</small></span><input type="date" name="deadline"></label></div>
-        <div class="composer-action"><p>The room begins with editable options and criteria. Anna analysis is only run when you request it.</p><button class="button button--accent button--nested" type="submit"><span>Enter the room</span><i>${icon("arrow")}</i></button></div>
+        <label class="field field--hero"><span>What decision are you facing?</span><textarea name="title" id="new-title" rows="2" maxlength="140" required placeholder="${attr(TEMPLATES[state.selectedTemplate].prompt)}"></textarea><small class="field-guidance">Write it as one concrete choice. You can refine every detail inside the room.</small></label>
+        <details class="composer-details">
+          <summary><span><strong>Refine the setup</strong><small>Optional context, deadline, and depth</small></span>${icon("arrow")}</summary>
+          <div class="composer-details__body">
+            <label class="field"><span>What context should the room understand?</span><textarea name="context" rows="3" maxlength="2400" placeholder="What changed, what is at stake, and what constraints matter?"></textarea></label>
+            <div class="composer-row"><fieldset class="mode-switch"><legend>Depth</legend><label><input type="radio" name="mode" value="quick" checked><span>Quick</span></label><label><input type="radio" name="mode" value="deep"><span>Deep</span></label></fieldset><label class="field field--date"><span>Decision date <small>Optional</small></span><input type="date" name="deadline"></label></div>
+          </div>
+        </details>
+        <div class="composer-action"><p>Start with editable options and criteria. Anna only analyzes the room when you ask.</p><button class="button button--accent button--nested" type="submit"><span>Enter the room</span><i>${icon("arrow")}</i></button></div>
       </div>
     </form>
   </div>`);

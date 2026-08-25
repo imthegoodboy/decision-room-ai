@@ -568,6 +568,28 @@ function icon(name, className = "") {
 
 // src/platform.js
 var LOCAL_KEY = `anna-preview:${STORE_KEY}`;
+var STORAGE_PREFIX = "decision-room:v2";
+var INDEX_KEY = `${STORAGE_PREFIX}:index`;
+var STORAGE_VALUE_BUDGET = 22e4;
+var decisionKey = (id, part) => `${STORAGE_PREFIX}:decision:${id}:${part}`;
+function storageValue(response) {
+  return response?.value ?? response?.result?.value ?? response?.result ?? response;
+}
+function serialized(value) {
+  return JSON.stringify(value);
+}
+function boundedList(value) {
+  const items = Array.isArray(value) ? [...value] : [];
+  while (items.length && new TextEncoder().encode(serialized(items)).length > STORAGE_VALUE_BUDGET) items.shift();
+  return items;
+}
+function splitDecision(decision) {
+  const { analyses, coach, ...core } = decision;
+  const parts = { core, analyses: boundedList(analyses), coach: boundedList(coach) };
+  const coreSize = new TextEncoder().encode(serialized(core)).length;
+  if (coreSize > STORAGE_VALUE_BUDGET) throw new Error("This decision is too large to sync safely. Export it, then shorten its longest evidence notes.");
+  return parts;
+}
 function llmText(response) {
   return response?.content?.text || response?.result?.content?.text || response?.text || "";
 }
@@ -576,6 +598,9 @@ var DecisionPlatform = class {
     this.anna = null;
     this.connected = false;
     this.storageMode = "device";
+    this.persistedIds = /* @__PURE__ */ new Set();
+    this.fingerprints = /* @__PURE__ */ new Map();
+    this.saveQueue = Promise.resolve();
   }
   async connect() {
     try {
@@ -597,9 +622,31 @@ var DecisionPlatform = class {
   }
   async load() {
     if (this.anna?.storage?.get) {
-      const response = await this.anna.storage.get({ key: STORE_KEY });
-      const value = response?.value ?? response?.result?.value ?? response?.result ?? response;
-      return normalizeStore(value && typeof value === "object" ? value : {});
+      const index = storageValue(await this.anna.storage.get({ key: INDEX_KEY }));
+      if (index?.storageVersion === 2 && Array.isArray(index.decisionIds)) {
+        const decisions = (await Promise.all(index.decisionIds.map(async (id) => {
+          const [core, analyses, coach] = await Promise.all([
+            this.anna.storage.get({ key: decisionKey(id, "core") }).then(storageValue),
+            this.anna.storage.get({ key: decisionKey(id, "analyses") }).then(storageValue),
+            this.anna.storage.get({ key: decisionKey(id, "coach") }).then(storageValue)
+          ]);
+          if (!core || typeof core !== "object") return null;
+          const parts = { core, analyses: Array.isArray(analyses) ? analyses : [], coach: Array.isArray(coach) ? coach : [] };
+          for (const [part, value] of Object.entries(parts)) this.fingerprints.set(decisionKey(id, part), serialized(value));
+          return { ...core, analyses: parts.analyses, coach: parts.coach };
+        }))).filter(Boolean);
+        this.persistedIds = new Set(index.decisionIds);
+        this.fingerprints.set(INDEX_KEY, serialized(index));
+        return normalizeStore({ version: index.version, preferences: index.preferences, decisions });
+      }
+      const legacy = storageValue(await this.anna.storage.get({ key: STORE_KEY }));
+      const migrated = normalizeStore(legacy && typeof legacy === "object" ? legacy : {});
+      if (migrated.decisions.length || legacy?.preferences) {
+        await this.save(migrated);
+        if (this.anna.storage.delete) await this.anna.storage.delete({ key: STORE_KEY }).catch(() => {
+        });
+      }
+      return migrated;
     }
     try {
       return normalizeStore(JSON.parse(localStorage.getItem(LOCAL_KEY) || "{}"));
@@ -609,15 +656,62 @@ var DecisionPlatform = class {
   }
   async save(store) {
     const cleanStore = normalizeStore(store);
+    this.saveQueue = this.saveQueue.catch(() => {
+    }).then(() => this.saveClean(cleanStore));
+    return this.saveQueue;
+  }
+  async saveClean(cleanStore) {
     if (this.anna?.storage?.set) {
-      await this.anna.storage.set({ key: STORE_KEY, value: cleanStore });
+      const nextIds = new Set(cleanStore.decisions.map((decision) => decision.id));
+      for (const decision of cleanStore.decisions) {
+        const parts = splitDecision(decision);
+        for (const [part, value] of Object.entries(parts)) {
+          const key = decisionKey(decision.id, part);
+          const fingerprint = serialized(value);
+          if (this.fingerprints.get(key) === fingerprint) continue;
+          await this.anna.storage.set({ key, value });
+          this.fingerprints.set(key, fingerprint);
+        }
+      }
+      const index = {
+        storageVersion: 2,
+        version: cleanStore.version,
+        decisionIds: cleanStore.decisions.map((decision) => decision.id),
+        preferences: cleanStore.preferences
+      };
+      const indexFingerprint = serialized(index);
+      if (this.fingerprints.get(INDEX_KEY) !== indexFingerprint) {
+        await this.anna.storage.set({ key: INDEX_KEY, value: index });
+        this.fingerprints.set(INDEX_KEY, indexFingerprint);
+      }
+      for (const id of this.persistedIds) {
+        if (nextIds.has(id)) continue;
+        for (const part of ["core", "analyses", "coach"]) {
+          const key = decisionKey(id, part);
+          if (this.anna.storage.delete) await this.anna.storage.delete({ key }).catch(() => {
+          });
+          this.fingerprints.delete(key);
+        }
+      }
+      this.persistedIds = nextIds;
       return;
     }
     localStorage.setItem(LOCAL_KEY, JSON.stringify(cleanStore));
   }
   async clear() {
+    await this.saveQueue.catch(() => {
+    });
     if (this.anna?.storage?.delete) {
-      await this.anna.storage.delete({ key: STORE_KEY });
+      for (const id of this.persistedIds) {
+        for (const part of ["core", "analyses", "coach"]) await this.anna.storage.delete({ key: decisionKey(id, part) }).catch(() => {
+        });
+      }
+      await this.anna.storage.delete({ key: INDEX_KEY }).catch(() => {
+      });
+      await this.anna.storage.delete({ key: STORE_KEY }).catch(() => {
+      });
+      this.persistedIds.clear();
+      this.fingerprints.clear();
       return;
     }
     localStorage.removeItem(LOCAL_KEY);
@@ -856,14 +950,19 @@ function templateIcon(key) {
 }
 function renderNew() {
   return shell(`<div class="page page--new">
-    <header class="new-intro reveal"><a class="text-link" href="#/home">${icon("arrow", "icon--back")} Back to decisions</a><p class="eyebrow">Open a decision room</p><h1>First, name the<br><em>real choice.</em></h1><p>Start with a proven frame or keep the canvas open. Everything stays editable.</p></header>
+    <header class="new-intro reveal"><a class="text-link" href="#/home">${icon("arrow", "icon--back")} Back to decisions</a><p class="eyebrow">Open a decision room</p><h1>First, name the<br><em>real choice.</em></h1><p>One clear question is enough. Compare the real options, ask Anna to challenge the evidence, then record a decision you can revisit.</p></header>
     <form id="new-decision-form" class="new-composer reveal">
       <fieldset class="template-fieldset"><legend>Choose a starting frame</legend><div class="template-grid">${Object.entries(TEMPLATES).map(([key, template]) => `<label class="template-choice ${state.selectedTemplate === key ? "is-selected" : ""}"><input type="radio" name="template" value="${key}" ${state.selectedTemplate === key ? "checked" : ""}><span class="template-mark">${templateIcon(key)}</span><span><small>${escapeHtml(template.eyebrow)}</small><strong>${escapeHtml(template.name)}</strong></span></label>`).join("")}</div></fieldset>
       <div class="composer-core">
-        <label class="field field--hero"><span>What decision are you facing?</span><textarea name="title" id="new-title" rows="2" maxlength="140" required placeholder="${attr(TEMPLATES[state.selectedTemplate].prompt)}"></textarea></label>
-        <label class="field"><span>What context should the room understand?</span><textarea name="context" rows="4" maxlength="2400" placeholder="What changed, what is at stake, and what constraints matter?"></textarea></label>
-        <div class="composer-row"><fieldset class="mode-switch"><legend>Depth</legend><label><input type="radio" name="mode" value="quick"><span>Quick</span></label><label><input type="radio" name="mode" value="deep" checked><span>Deep</span></label></fieldset><label class="field field--date"><span>Decision date <small>Optional</small></span><input type="date" name="deadline"></label></div>
-        <div class="composer-action"><p>The room begins with editable options and criteria. Anna analysis is only run when you request it.</p><button class="button button--accent button--nested" type="submit"><span>Enter the room</span><i>${icon("arrow")}</i></button></div>
+        <label class="field field--hero"><span>What decision are you facing?</span><textarea name="title" id="new-title" rows="2" maxlength="140" required placeholder="${attr(TEMPLATES[state.selectedTemplate].prompt)}"></textarea><small class="field-guidance">Write it as one concrete choice. You can refine every detail inside the room.</small></label>
+        <details class="composer-details">
+          <summary><span><strong>Refine the setup</strong><small>Optional context, deadline, and depth</small></span>${icon("arrow")}</summary>
+          <div class="composer-details__body">
+            <label class="field"><span>What context should the room understand?</span><textarea name="context" rows="3" maxlength="2400" placeholder="What changed, what is at stake, and what constraints matter?"></textarea></label>
+            <div class="composer-row"><fieldset class="mode-switch"><legend>Depth</legend><label><input type="radio" name="mode" value="quick" checked><span>Quick</span></label><label><input type="radio" name="mode" value="deep"><span>Deep</span></label></fieldset><label class="field field--date"><span>Decision date <small>Optional</small></span><input type="date" name="deadline"></label></div>
+          </div>
+        </details>
+        <div class="composer-action"><p>Start with editable options and criteria. Anna only analyzes the room when you ask.</p><button class="button button--accent button--nested" type="submit"><span>Enter the room</span><i>${icon("arrow")}</i></button></div>
       </div>
     </form>
   </div>`);

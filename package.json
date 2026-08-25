@@ -1,6 +1,6 @@
 {
   "name": "decision-room-ai",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "Decision Room AI for Anna",
@@ -9,7 +9,8 @@
     "test": "node --test tests/*.test.js",
     "test:e2e": "playwright test",
     "test:e2e:live": "playwright test --config playwright.live.config.js",
-    "check": "npm run build && npm test && anna-app validate --strict",
+    "check:identity": "node scripts/verify-anna-identity.mjs",
+    "check": "npm run check:identity && npm run build && npm test && anna-app validate --strict",
     "verify": "npm run check && npm run test:e2e"
   },
   "dependencies": {

@@ -19,6 +19,7 @@ async function createCareerDecision(frame) {
   await expect(frame.getByRole("heading", { name: /First, name the real choice/ })).toBeVisible();
   await frame.getByText("Career move", { exact: true }).click();
   await frame.getByLabel("What decision are you facing?").fill("Should I accept the product lead offer?");
+  await frame.getByText("Refine the setup", { exact: true }).click();
   await frame.getByLabel("What context should the room understand?").fill("The role offers more scope, but it changes my commute and gives up a trusted team.");
   await frame.getByRole("button", { name: /Enter the room/ }).click();
   await expect(frame.getByRole("heading", { name: /Name what is really at stake/ })).toBeVisible();
@@ -67,6 +68,25 @@ test("complete frame-to-outcome workflow works inside the Anna harness", async (
   expect(errors).toEqual([]);
 });
 
+test("first-use flow needs one question and keeps its primary action in the default Anna viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 820 });
+  const frame = await openRoom(page);
+  await frame.getByRole("link", { name: /Open a new room/ }).click();
+  await expect(frame.getByText("One clear question is enough", { exact: false })).toBeVisible();
+  await expect(frame.getByText("Optional context, deadline, and depth", { exact: true })).toBeVisible();
+  const action = frame.getByRole("button", { name: /Enter the room/ });
+  await expect(action).toBeVisible();
+  const actionBox = await action.boundingBox();
+  const appBox = await page.locator("iframe#app").boundingBox();
+  expect(actionBox).toBeTruthy();
+  expect(appBox).toBeTruthy();
+  expect(actionBox.y + actionBox.height).toBeLessThanOrEqual(appBox.y + appBox.height);
+  await frame.getByLabel("What decision are you facing?").fill("Should I launch this product now?");
+  await action.click();
+  await expect(frame.getByRole("heading", { name: /Name what is really at stake/ })).toBeVisible();
+  await expect(frame.getByText("Quick room", { exact: true })).toBeVisible();
+});
+
 test("library search, duplication, export, and settings are usable", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -87,6 +107,29 @@ test("library search, duplication, export, and settings are usable", async ({ pa
   await frame.getByText("Reduce motion").click();
   await expect(frame.locator("html")).toHaveAttribute("data-reduce-motion", "true");
   await expect(frame.getByRole("button", { name: /Export all data/ })).toBeVisible();
+});
+
+test("Anna Storage restores an in-progress room after reopen", async ({ page }) => {
+  const frame = await openRoom(page);
+  await frame.getByRole("link", { name: /Open a new room/ }).click();
+  await frame.getByText("Major purchase", { exact: true }).click();
+  await frame.getByLabel("What decision are you facing?").fill("Which laptop should I buy for client work?");
+  await frame.getByRole("button", { name: /Enter the room/ }).click();
+  await frame.locator('[data-option-field="name"]').first().fill("Portable model");
+  await frame.locator('[data-option-field="notes"]').first().fill("Fits the travel bag and supports the required tools.");
+  await expect(frame.getByText("Saved to Anna", { exact: true })).toBeVisible();
+
+  const appFrame = page.frames().find((candidate) => candidate.url().includes("/anna-apps/"));
+  expect(appFrame).toBeTruthy();
+  await Promise.all([
+    appFrame.waitForNavigation({ waitUntil: "domcontentloaded" }),
+    appFrame.evaluate(() => location.reload()),
+  ]);
+  const restored = page.frameLocator("iframe#app");
+  await expect(restored.getByRole("heading", { name: /Name what is really at stake/ })).toBeVisible();
+  await expect(restored.locator('[data-decision-field="title"]')).toHaveValue("Which laptop should I buy for client work?");
+  await expect(restored.locator('[data-option-field="name"]').first()).toHaveValue("Portable model");
+  await expect(restored.locator('[data-option-field="notes"]').first()).toHaveValue("Fits the travel bag and supports the required tools.");
 });
 
 test("narrow Anna window has no horizontal overflow and keeps Coach usable", async ({ page }) => {

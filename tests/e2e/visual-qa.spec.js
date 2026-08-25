@@ -13,6 +13,7 @@ test("capture native Anna app views for visual QA", async ({ page }) => {
   await page.screenshot({ path: "output/playwright/create-desktop.png", animations: "disabled", clip: frameBox });
   await frame.getByText("Career move", { exact: true }).click();
   await frame.getByLabel("What decision are you facing?").fill("Should I accept the product lead offer?");
+  await frame.getByText("Refine the setup", { exact: true }).click();
   await frame.getByLabel("What context should the room understand?").fill("The role offers more scope, but changes my commute and gives up a trusted team.");
   await frame.getByRole("button", { name: /Enter the room/ }).click();
   await expect(frame.getByRole("heading", { name: /Name what is really at stake/ })).toBeVisible();

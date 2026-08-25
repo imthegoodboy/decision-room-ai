@@ -12,7 +12,7 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: "anna-app dev --port 5197 --llm-account https://anna.partners",
+    command: "anna-app dev --port 5197 --slug decision-room-ai --llm-app-slug decision-room-ai --storage aps --llm-account https://anna.partners",
     url: "http://127.0.0.1:5197/",
     timeout: 120_000,
     reuseExistingServer: false,

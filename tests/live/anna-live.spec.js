@@ -11,6 +11,7 @@ test("Anna's live LLM completes structured analysis and Coach chat", async ({ pa
   await frame.getByRole("link", { name: /Open a new room/ }).click();
   await frame.getByText("Career move", { exact: true }).click();
   await frame.getByLabel("What decision are you facing?").fill("Should I accept a product lead role or stay with my current team?");
+  await frame.getByText("Refine the setup", { exact: true }).click();
   await frame.getByLabel("What context should the room understand?").fill("The offer increases scope and learning, but adds a longer commute. I can ask for a two-week trial commute before deciding.");
   await frame.getByRole("button", { name: /Enter the room/ }).click();
 
@@ -28,4 +29,9 @@ test("Anna's live LLM completes structured analysis and Coach chat", async ({ pa
   await expect(reply).not.toHaveText(/^\s*\{/);
   await expect(frame.locator(".chat-message--assistant header").last()).not.toContainText("Local fallback");
   expect(errors).toEqual([]);
+
+  await frame.getByRole("button", { name: "Decision actions" }).click();
+  await frame.getByRole("button", { name: /Delete decision/ }).click();
+  await frame.getByRole("button", { name: "Delete decision", exact: true }).last().click();
+  await expect(frame.getByRole("heading", { name: /Make the choice/ })).toBeVisible();
 });
