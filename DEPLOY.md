@@ -9,11 +9,12 @@ Verified on 2026-08-25 against `https://anna.partners`:
 ```text
 app id: 218
 slug: decision-room-ai
-current submitted version before this update: 1.0.0 (version id 568)
-target review version: 1.0.1
-owner install target: 1.0.1, enabled, update_available=false
-permission target: satisfied=true, missing=[]
-review target: pending_review for 1.0.1
+immutable version: 1.0.1 (version id 584)
+content hash: ecc688de2b903209fed7c306c48e2f1c10840183b7d791f7cd7befd947269309
+bundle: ready (7 files, 324514 bytes)
+owner install: 1.0.1, enabled, update_available=false
+permissions: satisfied=true, missing=[]
+review state: pending_review (candidate 1.0.1)
 public release: waiting for Anna admin approval
 source: https://github.com/imthegoodboy/decision-room-ai
 ```
