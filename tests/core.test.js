@@ -3,11 +3,15 @@ import assert from "node:assert/strict";
 
 import {
   MAX_DECISIONS,
+  applyDecisionDraft,
   buildAnalysisPrompt,
+  buildDecisionDraftPrompt,
+  buildFallbackDraft,
   buildCoachPrompt,
   buildFallbackAnalysis,
   buildFallbackCoachResponse,
   calculateScores,
+  compareInsight,
   confidenceLens,
   createDecision,
   decisionProgress,
@@ -26,6 +30,34 @@ test("career template creates a complete editable decision frame", () => {
   assert.equal(decision.criteria[0].name, "Learning and growth");
   assert.equal(decision.ratings[decision.options[0].id][decision.criteria[0].id], 3);
   assert.equal(decision.status, "draft");
+});
+
+test("AI first draft fills the room instead of leaving a blank worksheet", () => {
+  const now = new Date("2026-08-28T10:00:00Z");
+  const decision = createDecision({ title: "Should I accept the Shanghai role or stay remote?", context: "Career growth matters, and I need to care for family.", template: "career" }, now);
+  const draft = buildFallbackDraft(decision, now);
+  applyDecisionDraft(decision, draft, { source: "local", generatedAt: now.toISOString() });
+  assert.ok(decision.options.length >= 2);
+  assert.equal(decision.criteria.length, 5);
+  assert.equal(decision.deadline, "2026-09-27");
+  assert.equal(decision.premortem.length, 5);
+  assert.ok(decision.assumptions.length >= 3);
+  assert.ok(decision.risks.length >= 2);
+  assert.ok(decision.draftMeta.clarifyingQuestions.length >= 2);
+  assert.ok(decision.commitSuggestion.rationale.length > 20);
+  assert.match(decision.evidence[decision.options[0].id][decision.criteria[0].id], /Draft hypothesis/i);
+});
+
+test("AI draft and comparison prompts make the proactive role explicit", () => {
+  const decision = createDecision({ title: "Should we launch or run a pilot?", context: "The evidence is incomplete." });
+  applyDecisionDraft(decision, buildFallbackDraft(decision), { source: "local" });
+  const prompt = buildDecisionDraftPrompt(decision, new Date("2026-08-28T00:00:00Z"));
+  const insight = compareInsight(decision);
+  assert.match(prompt, /exactly five premortem causes/i);
+  assert.match(prompt, /initial 1–5 scores/i);
+  assert.match(insight.headline, /leads/i);
+  assert.match(insight.reason, /contributing/i);
+  assert.match(insight.sensitivity, /weight|leader/i);
 });
 
 test("weighted scores are normalized to a transparent 0-100 scale", () => {
@@ -116,6 +148,9 @@ test("local AI fallbacks stay grounded, useful, and transparent", () => {
   assert.match(analysis.summary, /evidence coverage/i);
   assert.ok(analysis.blindSpots.length > 0);
   assert.ok(analysis.experiments.length > 0);
+  const premortem = buildFallbackAnalysis(decision, "premortem");
+  assert.equal(premortem.premortem.length, 5);
+  assert.ok(premortem.premortem.every((item) => item.cause && item.warning && item.mitigation));
   const reply = buildFallbackCoachResponse(decision, "What assumption should I test first?");
   assert.match(reply, /live reply was unavailable/i);
   assert.match(reply, /belief|assumption/i);

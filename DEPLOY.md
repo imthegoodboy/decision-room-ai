@@ -2,28 +2,28 @@
 
 Official guide: https://forum.anna.partners/t/build-on-anna-101/228
 
-## Current Anna state
+Decision Room AI is intentionally tool-less. The app is a static UI that uses
+Anna's host `llm.complete` capability for advisory drafts and Anna Storage for
+bounded persistence. The manifest also declares `agent.session.auto`, including
+the nested UI host shape required by the Anna permission editor. There is no
+provider API key, external service, or bundled Executa to install.
 
-Verified on 2026-08-25 against `https://anna.partners`:
+## Release identity
+
+Candidate to push and cut:
 
 ```text
 app id: 218
 slug: decision-room-ai
-immutable version: 1.0.1 (version id 584)
-content hash: ecc688de2b903209fed7c306c48e2f1c10840183b7d791f7cd7befd947269309
-bundle: ready (7 files, 324514 bytes)
-owner install: 1.0.1, enabled, update_available=false
-permissions: satisfied=true, missing=[]
-review state: pending_review (candidate 1.0.1)
-public release: waiting for Anna admin approval
+name: Decision Room AI
+candidate version: 1.1.0
+architecture: UI + Anna LLM + Anna Storage; no Executa
 source: https://github.com/imthegoodboy/decision-room-ai
 ```
 
-The source, logo, and four English product screenshots are included. Anna blocks
-`apps release` while the app is `pending_review`; this is an external review
-gate, not a build failure. After the state changes to `approved`, publish the
-already-tested immutable version with the release command below. Do not create
-or cut another version unless code or listing content changes.
+Keep `app.json`, `package.json`, `package-lock.json`, and this candidate version
+aligned. If code or listing content changes after a cut, bump the patch version;
+never mutate or cut the same immutable version twice.
 
 ## Verification gate
 
@@ -33,6 +33,7 @@ cd C:\Users\parth\Desktop\anna-decision-room-ai
 
 npm ci
 npm run check
+anna-app validate --strict
 anna-app dev --port 5187 --slug decision-room-ai --llm-app-slug decision-room-ai --storage aps --llm-account $ANNA_HOST
 # In another terminal:
 npm run test:e2e
@@ -42,6 +43,16 @@ npm run test:e2e:live
 `test:e2e:live` is the real Anna LLM gate. It must render an analysis labelled
 `Anna` and a non-fallback Coach reply. Fixture tests remain necessary for
 deterministic coverage but are not a substitute for this Host API call.
+
+The default deterministic browser gate also verifies first-use copy and CTA
+placement, the AI-first draft, comparison analysis and sensitivity, five
+premortem causes, an editable Commit recommendation, exact review dates,
+Storage restore after reopen, responsive layout, and accessibility. If the
+local bridge times out while starting, warm its cached runtime once and retry:
+
+```powershell
+uvx --from anna-app-runtime-local@0.2.0a21 anna-app-bridge --help
+```
 
 ## Identity and version gate
 
@@ -55,29 +66,35 @@ The intended new identity is:
 ```text
 slug: decision-room-ai
 name: Decision Room AI
-version: 1.0.1
+version: 1.1.0
 architecture: UI + Anna LLM + Anna Storage; no Executa
 ```
 
-## Upload, install, and review
+## Push, cut, install, and review
 
 ```powershell
-anna-app apps publish --account $ANNA_HOST --json
+git status --short
+git add app.json manifest.json package.json package-lock.json README.md DEPLOY.md src bundle tests listing-assets
+git commit -m "feat: make Decision Room AI proactive for marketplace review"
+git push origin main
+
+anna-app whoami --json
+anna-app apps push --account $ANNA_HOST --json
+anna-app apps cut 1.1.0 --account $ANNA_HOST --json
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
 anna-app apps versions decision-room-ai --account $ANNA_HOST --json
-anna-app apps sync-meta --account $ANNA_HOST --dry-run --json
-anna-app apps sync-meta --account $ANNA_HOST --json
 anna-app apps submit-review decision-room-ai --account $ANNA_HOST --json
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
 ```
 
-Install the exact uploaded version from the Developer page and run the complete
-workflow inside Anna. Review submission is not public release. Release only the
-approved exact version after Anna review.
+`apps push` uploads the mutable draft. `apps cut` creates the immutable version
+used for testing/review. `submit-review` requests Marketplace review; it does
+not make the app public. Install the exact cut version from the Developer page,
+then repeat the workflow and permission save inside Anna.
 
-Install version `1.0.1` through Anna's authenticated
-developer install endpoint. `anna-app apps grants` confirms the installed
-version, enabled state, complete LLM/storage grants, and no missing permissions.
+`anna-app apps grants decision-room-ai --account $ANNA_HOST --json` confirms the
+installed version, enabled state, complete LLM/storage/agent-session grants,
+and no missing permissions.
 
 ## Release after approval
 
@@ -86,10 +103,33 @@ $ANNA_HOST = "https://anna.partners"
 cd C:\Users\parth\Desktop\anna-decision-room-ai
 
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
-anna-app apps release 1.0.1 --slug decision-room-ai --account $ANNA_HOST --json
+anna-app apps release 1.1.0 --slug decision-room-ai --account $ANNA_HOST --json
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
 anna-app apps versions decision-room-ai --account $ANNA_HOST --json
 ```
 
 Expected precondition: status is `approved`. A `pending_review` response means
-the reviewer has not completed the external approval yet; do not bypass it.
+the reviewer has not completed the external approval yet; do not bypass it or
+release early.
+
+## Marketplace assets
+
+The listing declares six English screenshots generated from the native harness:
+
+```text
+home-desktop.png
+ai-draft-desktop.png
+ai-compare-desktop.png
+ai-premortem-desktop.png
+ai-commit-desktop.png
+coach-mobile.png
+```
+
+Regenerate them with:
+
+```powershell
+npx playwright test tests/e2e/visual-qa.spec.js
+```
+
+Copy only reviewed captures into `listing-assets/`, then rerun `npm run check`
+so every declared path exists before cutting a version.

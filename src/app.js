@@ -3,11 +3,15 @@ import {
   MAX_DECISIONS,
   MAX_OPTIONS,
   TEMPLATES,
+  applyDecisionDraft,
   buildAnalysisPrompt,
+  buildDecisionDraftPrompt,
+  buildFallbackDraft,
   buildCoachPrompt,
   buildFallbackAnalysis,
   buildFallbackCoachResponse,
   calculateScores,
+  compareInsight,
   confidenceLens,
   createDecision,
   createId,
@@ -35,6 +39,7 @@ const state = {
   filter: "all",
   selectedTemplate: "blank",
   aiBusy: false,
+  draftBusy: false,
   coachBusy: false,
   coachDraft: "",
   saving: false,
@@ -56,9 +61,8 @@ const relativeDate = (value) => {
   if (days === 0) return "Today";
   if (days === 1) return "Tomorrow";
   if (days === -1) return "Yesterday";
-  if (days > 1 && days < 14) return `In ${days} days`;
-  if (days < -1 && days > -14) return `${Math.abs(days)} days ago`;
-  return shortDate(value);
+  if (days > 1) return `In ${days} days`;
+  return `${Math.abs(days)} days ago`;
 };
 
 function activeDecision() {
@@ -285,7 +289,7 @@ function renderNew() {
             <div class="composer-row"><fieldset class="mode-switch"><legend>Depth</legend><label><input type="radio" name="mode" value="quick" checked><span>Quick</span></label><label><input type="radio" name="mode" value="deep"><span>Deep</span></label></fieldset><label class="field field--date"><span>Decision date <small>Optional</small></span><input type="date" name="deadline"></label></div>
           </div>
         </details>
-        <div class="composer-action"><p>Start with editable options and criteria. Anna only analyzes the room when you ask.</p><button class="button button--accent button--nested" type="submit"><span>Enter the room</span><i>${icon("arrow")}</i></button></div>
+        <div class="composer-action"><p>Anna will turn this prompt into an editable first draft of options, criteria, scores, and the questions worth answering.</p><button class="button button--accent button--nested" type="submit"><span>Enter the room · build first draft</span><i>${icon("arrow")}</i></button></div>
       </div>
     </form>
   </div>`);
@@ -302,9 +306,24 @@ function stageHeader(decision, view, eyebrow, title, description) {
   </nav>`;
 }
 
+function draftStudio(decision) {
+  const meta = decision.draftMeta;
+  if (!meta) return "";
+  const source = meta.source === "anna" ? "Anna first draft" : "Starter draft · ready to refine";
+  const status = state.draftBusy ? "Anna is refining this room…" : source;
+  return `<section class="draft-studio reveal" aria-labelledby="draft-studio-title">
+    <div class="draft-studio__mark">${icon("spark")}</div>
+    <div class="draft-studio__copy"><p class="eyebrow">${escapeHtml(status)}</p><h2 id="draft-studio-title">A working analysis, not a blank worksheet.</h2><p>${escapeHtml(meta.reasoning || "Review Anna's suggestions, then correct anything that does not match your situation.")}</p>
+      <div class="draft-facts"><span><strong>${decision.options.length}</strong> options</span><span><strong>${decision.criteria.length}</strong> criteria</span><span><strong>${decision.premortem.length || 5}</strong> premortem causes</span><span><strong>${decision.deadline ? shortDate(decision.deadline) : "Not set"}</strong> review date</span></div>
+      ${meta.clarifyingQuestions?.length ? `<div class="draft-questions"><strong>Questions to tighten the draft</strong><ul>${meta.clarifyingQuestions.map((question) => `<li>${escapeHtml(question)}</li>`).join("")}</ul></div>` : ""}
+    </div><button class="button button--quiet" type="button" data-action="refine-draft" ${state.draftBusy ? "disabled" : ""}>${icon("spark")} ${meta.source === "anna" ? "Refresh with Anna" : "Refine with Anna"}</button>
+  </section>`;
+}
+
 function renderFrame(decision) {
   return shell(`<div class="page page--stage">
     ${stageHeader(decision, "frame", "01 · Frame", "Name what is\nreally at stake.", "A strong decision begins with a precise question, credible options, and criteria that reflect your real priorities.")}
+    ${draftStudio(decision)}
     <section class="frame-layout reveal">
       <div class="paper-shell paper-shell--large"><div class="paper-core">
         <div class="section-heading"><div><p class="eyebrow">Decision statement</p><h2>The question</h2></div><span class="mode-badge">${decision.mode === "quick" ? "Quick room" : "Deep room"}</span></div>
@@ -348,8 +367,10 @@ function scoreSummary(decision) {
 function renderCompare(decision) {
   const scores = calculateScores(decision);
   const sensitivity = sensitivityAnalysis(decision);
+  const insight = compareInsight(decision);
   return shell(`<div class="page page--stage">
     ${stageHeader(decision, "compare", "02 · Compare", "Make the trade-offs\nvisible.", "Score consistently, record the evidence behind each rating, and notice where a small assumption changes the leader.")}
+    <section class="compare-ai reveal" aria-labelledby="compare-ai-title"><div class="compare-ai__head"><span class="ai-spark">${icon("spark")}</span><div><p class="eyebrow">${decision.draftMeta?.source === "anna" ? "Anna analysis" : "AI first-pass analysis"}</p><h2 id="compare-ai-title">${escapeHtml(insight.headline)}</h2></div><span class="draft-chip">Editable suggestion</span></div><p>${escapeHtml(insight.summary)}</p><div class="compare-ai__signals"><div><span>Why it leads</span><strong>${escapeHtml(insight.reason)}</strong></div><div><span>Most influential</span><strong>${escapeHtml(insight.weight)}</strong></div><div><span>Stability</span><strong>${escapeHtml(insight.sensitivity)}</strong></div><div><span>Evidence</span><strong>${escapeHtml(insight.evidence)}</strong></div></div></section>
     <section class="compare-lead reveal"><div><p class="eyebrow">Live ranking</p><h2>Clarity, not false precision.</h2><p>The matrix converts your inputs into a comparable 0–100 view. It does not turn judgment into fact.</p></div>${scoreSummary(decision)}</section>
     <section class="matrix-section reveal">
       <div class="section-heading"><div><p class="eyebrow">Comparison matrix</p><h2>Score each fit from 1 to 5.</h2></div><div class="scale-key"><span>1 · Poor fit</span><span>3 · Mixed</span><span>5 · Strong fit</span></div></div>
@@ -362,7 +383,7 @@ function renderCompare(decision) {
     </section>
     <section class="evidence-section reveal">
       <div class="section-heading"><div><p class="eyebrow">Evidence notes</p><h2>Write down what the scores mean.</h2><p>Specific evidence makes the matrix useful when confidence fades later.</p></div></div>
-      <div class="evidence-columns">${decision.options.map((option) => `<article class="paper-shell"><div class="paper-core"><h3>${escapeHtml(option.name)}</h3>${decision.criteria.map((criterion) => `<label class="field field--evidence"><span>${escapeHtml(criterion.name)}</span><textarea data-evidence data-option-id="${attr(option.id)}" data-criterion-id="${attr(criterion.id)}" rows="2" maxlength="800" placeholder="What supports this rating?">${escapeHtml(decision.evidence[option.id][criterion.id])}</textarea></label>`).join("")}</div></article>`).join("")}</div>
+      <div class="evidence-columns">${decision.options.map((option) => `<article class="paper-shell"><div class="paper-core"><h3>${escapeHtml(option.name)}</h3>${decision.criteria.map((criterion) => `<label class="field field--evidence"><span>${escapeHtml(criterion.name)}</span><textarea data-evidence data-option-id="${attr(option.id)}" data-criterion-id="${attr(criterion.id)}" rows="2" maxlength="800" placeholder="Replace Anna's draft rationale with evidence">${escapeHtml(decision.evidence[option.id][criterion.id])}</textarea></label>`).join("")}</div></article>`).join("")}</div>
       <div class="stage-continue"><p>${scores[0] ? `${escapeHtml(scores[0].name)} currently leads by ${scores[1] ? (scores[0].score - scores[1].score).toFixed(1) : "0"} points.` : "Complete the matrix to see a ranking."}</p><a class="button button--ink button--nested" href="${decisionUrl(decision, "challenge")}"><span>Challenge the result</span><i>${icon("arrow")}</i></a></div>
     </section>
   </div>`, decision);
@@ -379,6 +400,7 @@ function analysisCard(analysis) {
     <header><div><span class="analysis-type">${escapeHtml(analysis.type)} · ${analysis.source === "local" ? "Local fallback" : "Anna"}</span><h2>${escapeHtml(analysis.headline)}</h2></div><time>${shortDate(analysis.createdAt)}</time></header>
     <p class="analysis-summary">${escapeHtml(analysis.summary)}</p>
     <div class="analysis-grid">${sections.map(([title, items]) => `<section><h3>${escapeHtml(title)}</h3><ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></section>`).join("")}</div>
+    ${analysis.premortem?.length ? `<div class="analysis-premortem"><h3>Premortem causes</h3>${analysis.premortem.map((item, index) => `<div><strong>${String(index + 1).padStart(2, "0")}. ${escapeHtml(item.cause)}</strong><span><b>Signal:</b> ${escapeHtml(item.warning)}</span><span><b>Mitigation:</b> ${escapeHtml(item.mitigation)}</span></div>`).join("")}</div>` : ""}
     ${analysis.recommendation ? `<blockquote><span>Conditional recommendation</span><p>${escapeHtml(analysis.recommendation)}</p></blockquote>` : ""}
     ${analysis.caveat ? `<p class="analysis-caveat"><strong>What this cannot establish:</strong> ${escapeHtml(analysis.caveat)}</p>` : ""}
   </article>`;
@@ -402,6 +424,7 @@ function renderChallenge(decision) {
         <div class="register-list">${decision.risks.length ? decision.risks.map((item, index) => `<article class="register-item"><span>R${index + 1}</span><div><label class="field field--bare"><span>Risk</span><input data-risk-field="text" data-id="${attr(item.id)}" maxlength="500" value="${attr(item.text)}"></label><div class="risk-row"><label><span>For</span><select data-risk-field="optionId" data-id="${attr(item.id)}">${decision.options.map((option) => `<option value="${attr(option.id)}" ${option.id === item.optionId ? "selected" : ""}>${escapeHtml(option.name)}</option>`).join("")}</select></label><label><span>Likelihood</span><input type="number" min="1" max="5" data-risk-field="likelihood" data-id="${attr(item.id)}" value="${item.likelihood}"></label><label><span>Impact</span><input type="number" min="1" max="5" data-risk-field="impact" data-id="${attr(item.id)}" value="${item.impact}"></label></div></div><button class="icon-control" type="button" data-action="remove-risk" data-id="${attr(item.id)}" aria-label="Remove risk">${icon("trash")}</button></article>`).join("") : `<p class="register-empty">No risks recorded yet. Start with the most plausible way the leading option disappoints.</p>`}</div>
       </div>
     </section>
+    <section class="premortem-panel reveal" aria-labelledby="premortem-title"><div class="section-heading"><div><p class="eyebrow">AI premortem</p><h2 id="premortem-title">If this decision fails, we want to see it early.</h2><p>Five preventable failure modes, with a signal to watch and a mitigation to test. Edit the assumptions above as your context improves.</p></div><span class="analysis-count">${decision.premortem.length || 0} / 5 causes</span></div><div class="premortem-list">${decision.premortem.length ? decision.premortem.map((item, index) => `<article class="premortem-item"><span class="premortem-number">${String(index + 1).padStart(2, "0")}</span><div><h3>${escapeHtml(item.cause)}</h3><dl><div><dt>Early signal</dt><dd>${escapeHtml(item.warning || "Watch for evidence that this assumption is weakening.")}</dd></div><div><dt>Mitigation</dt><dd>${escapeHtml(item.mitigation || "Define a small test before committing.")}</dd></div></dl></div></article>`).join("") : `<p class="register-empty">Run the premortem lens to generate five failure causes, warning signals, and mitigations.</p>`}</div></section>
     <section class="ai-studio reveal">
       <div class="ai-studio__intro"><p class="eyebrow">Anna thinking studio</p><h2>Invite a useful disagreement.</h2><p>Choose a lens. Anna receives only this decision’s current context and returns a structured advisory note. It cannot alter your scores or commit for you.</p></div>
       <div class="analysis-actions">${[["challenger", "Challenge my thinking", "Find bias, missing options, and weak evidence."], ["premortem", "Run a premortem", "Imagine failure and expose preventable causes."], ["scenarios", "Explore scenarios", "Map best, expected, and difficult futures."], ["advisor", "Synthesize next steps", "Turn uncertainty into reversible experiments."]].map(([type, title, text]) => `<button class="analysis-action" type="button" data-action="run-analysis" data-type="${type}" ${state.aiBusy ? "disabled" : ""}><span>${icon("spark")}</span><strong>${title}</strong><small>${text}</small>${icon("arrow")}</button>`).join("")}</div>
@@ -441,16 +464,19 @@ function renderCommit(decision) {
   const scores = calculateScores(decision);
   const leader = scores[0];
   const commitment = decision.commitment;
+  const suggestion = !commitment ? decision.commitSuggestion : null;
+  const draft = commitment || suggestion;
   return shell(`<div class="page page--stage">
     ${stageHeader(decision, "commit", "04 · Commit", "Choose deliberately.\nLeave a trail.", "Record the choice, confidence, and first action. A clear rationale is insurance against hindsight bias.")}
     <section class="commit-layout reveal">
       <aside class="recommendation-panel"><p class="eyebrow">What the matrix says</p><span class="recommendation-score">${leader?.score ?? "—"}<small>/100</small></span><h2>${escapeHtml(leader?.name || "No leader yet")}</h2><p>${leader ? `Currently leads the weighted comparison${scores[1] ? ` by ${(leader.score - scores[1].score).toFixed(1)} points` : ""}.` : "Complete the comparison matrix first."}</p><div class="principle-note"><strong>Remember</strong><p>A score is a summary of your assumptions. It is not permission to ignore your judgment.</p></div></aside>
       <form id="commit-form" class="paper-shell paper-shell--large"><div class="paper-core">
-        <p class="eyebrow">Your commitment</p><h2>${commitment ? "Update the decision record." : "What will you do?"}</h2>
-        <label class="field"><span>Chosen option</span><select name="optionId" required><option value="">Select one</option>${decision.options.map((option) => `<option value="${attr(option.id)}" ${commitment?.optionId === option.id ? "selected" : ""}>${escapeHtml(option.name)}</option>`).join("")}</select></label>
-        <label class="field"><span>Why this option?</span><textarea name="rationale" rows="5" maxlength="1800" required placeholder="Name the evidence, trade-offs, and uncertainty you are accepting.">${escapeHtml(commitment?.rationale || "")}</textarea></label>
-        <label class="field"><span>First concrete action</span><input name="nextAction" maxlength="500" required value="${attr(commitment?.nextAction || "")}" placeholder="The next observable step"></label>
-        <div class="form-split"><label class="field"><span>Confidence</span><select name="confidence"><option value="1" ${commitment?.confidence === 1 ? "selected" : ""}>1 · Very uncertain</option><option value="2" ${commitment?.confidence === 2 ? "selected" : ""}>2 · Cautious</option><option value="3" ${!commitment || commitment.confidence === 3 ? "selected" : ""}>3 · Balanced</option><option value="4" ${commitment?.confidence === 4 ? "selected" : ""}>4 · Confident</option><option value="5" ${commitment?.confidence === 5 ? "selected" : ""}>5 · Very confident</option></select></label><label class="field"><span>Review date</span><input type="date" name="reviewDate" required value="${attr(commitment?.reviewDate || defaultReviewDate())}"></label></div>
+        <p class="eyebrow">Your commitment</p><h2>${commitment ? "Update the decision record." : suggestion ? "Review Anna's recommendation." : "What will you do?"}</h2>
+        ${suggestion ? `<div class="commit-draft-note"><span>${icon("spark")}</span><p><strong>Anna drafted this from your room.</strong> Confirm or edit every field before recording a commitment. It is advisory, not a decision.</p></div>` : ""}
+        <label class="field"><span>Chosen option</span><select name="optionId" required><option value="">Select one</option>${decision.options.map((option) => `<option value="${attr(option.id)}" ${draft?.optionId === option.id ? "selected" : ""}>${escapeHtml(option.name)}</option>`).join("")}</select></label>
+        <label class="field"><span>Why this option?</span><textarea name="rationale" rows="5" maxlength="1800" required placeholder="Name the evidence, trade-offs, and uncertainty you are accepting.">${escapeHtml(draft?.rationale || "")}</textarea></label>
+        <label class="field"><span>First concrete action</span><input name="nextAction" maxlength="500" required value="${attr(draft?.nextAction || "")}" placeholder="The next observable step"></label>
+        <div class="form-split"><label class="field"><span>Confidence</span><select name="confidence"><option value="1" ${draft?.confidence === 1 ? "selected" : ""}>1 · Very uncertain</option><option value="2" ${draft?.confidence === 2 ? "selected" : ""}>2 · Cautious</option><option value="3" ${!draft || draft.confidence === 3 ? "selected" : ""}>3 · Balanced</option><option value="4" ${draft?.confidence === 4 ? "selected" : ""}>4 · Confident</option><option value="5" ${draft?.confidence === 5 ? "selected" : ""}>5 · Very confident</option></select></label><label class="field"><span>Review date</span><input type="date" name="reviewDate" required value="${attr(commitment?.reviewDate || defaultReviewDate())}"></label></div>
         <div class="form-submit"><p>You can revise this record until you complete the outcome review.</p><button class="button button--accent button--nested" type="submit"><span>${commitment ? "Update commitment" : "Record my decision"}</span><i>${icon("commit")}</i></button></div>
       </div></form>
     </section>
@@ -472,7 +498,7 @@ function renderReview(decision) {
   }
   return shell(`<div class="page page--stage">
     ${stageHeader(decision, "review", "05 · Review", "Close the loop.\nKeep the lesson.", "Separate decision quality from outcome luck, then carry the useful lesson into your next choice.")}
-    <section class="review-timeline reveal"><div><span>Decided</span><strong>${shortDate(commitment.decidedAt)}</strong></div><i></i><div><span>Review planned</span><strong>${relativeDate(commitment.reviewDate)}</strong></div><i></i><div class="${decision.outcome ? "is-complete" : ""}"><span>Outcome</span><strong>${decision.outcome ? "Recorded" : "Open"}</strong></div></section>
+    <section class="review-timeline reveal"><div><span>Decided</span><strong>${shortDate(commitment.decidedAt)}</strong></div><i></i><div><span>Review planned</span><strong>${shortDate(commitment.reviewDate)}</strong><small>${relativeDate(commitment.reviewDate)}</small></div><i></i><div class="${decision.outcome ? "is-complete" : ""}"><span>Outcome</span><strong>${decision.outcome ? "Recorded" : "Open"}</strong></div></section>
     <section class="review-layout reveal">
       <aside class="decision-memory"><p class="eyebrow">The record</p><h2>${escapeHtml(chosen?.name || "Chosen option")}</h2><blockquote>${escapeHtml(commitment.rationale)}</blockquote><dl><div><dt>Confidence then</dt><dd>${commitment.confidence}/5</dd></div><div><dt>First action</dt><dd>${escapeHtml(commitment.nextAction)}</dd></div></dl></aside>
       <form id="outcome-form" class="paper-shell paper-shell--large"><div class="paper-core"><p class="eyebrow">Outcome review</p><h2>What actually happened?</h2><label class="field"><span>Describe the outcome</span><textarea name="result" rows="5" maxlength="1800" required placeholder="What changed after the decision?">${escapeHtml(decision.outcome?.result || "")}</textarea></label><label class="field"><span>What should future-you remember?</span><textarea name="lesson" rows="4" maxlength="1400" required placeholder="A principle, warning, or repeatable move">${escapeHtml(decision.outcome?.lesson || "")}</textarea></label><fieldset class="outcome-score"><legend>Outcome quality</legend>${[1, 2, 3, 4, 5].map((score) => `<label><input type="radio" name="score" value="${score}" ${Number(decision.outcome?.score || 3) === score ? "checked" : ""}><span>${score}</span><small>${["Poor", "Weak", "Mixed", "Good", "Strong"][score - 1]}</small></label>`).join("")}</fieldset><div class="form-submit"><p>A difficult outcome does not always mean the decision process was poor.</p><button class="button button--accent button--nested" type="submit"><span>${decision.outcome ? "Update review" : "Complete the loop"}</span><i>${icon("review")}</i></button></div></div></form>
@@ -584,6 +610,40 @@ function removeCriterion(decision, id) {
   render();
 }
 
+async function refineDecisionDraft(decision, { automatic = false } = {}) {
+  if (state.draftBusy) return;
+  const baseline = decision.updatedAt;
+  const generatedAt = new Date().toISOString();
+  state.draftBusy = true;
+  decision.draftMeta = { ...(decision.draftMeta || {}), status: "refining", generatedAt };
+  if (activeDecision()?.id === decision.id) render();
+  try {
+    const text = await state.platform.complete({
+      messages: [{ role: "user", content: { type: "text", text: buildDecisionDraftPrompt(decision, new Date()) } }],
+      systemPrompt: "You are Decision Room's first-pass decision architect. Build an editable draft from the user's supplied decision only. Propose realistic options, weighted criteria, initial scores with reasoning, assumptions, risks, clarifying questions, exactly five premortem causes with warning signals and mitigations, and a conditional commit draft. Never invent external facts or make the final decision. Return JSON only.",
+      maxTokens: 5200,
+      temperature: 0.2,
+    });
+    const parsed = parseStructuredJson(text);
+    if (automatic && decision.updatedAt !== baseline) {
+      decision.draftMeta.status = decision.draftMeta.source === "anna" ? "ready" : "fallback";
+      return;
+    }
+    applyDecisionDraft(decision, parsed, { source: "anna", generatedAt });
+    touch(decision);
+    await saveNow();
+    if (!automatic) toast("Anna's first draft is ready. Review the suggestions before you rely on them.", "success");
+  } catch (error) {
+    if (!decision.draftMeta) decision.draftMeta = {};
+    decision.draftMeta.status = "fallback";
+    if (!automatic) toast("Anna could not refine this draft, so the transparent starter analysis remains available.", "default", 7000);
+  } finally {
+    state.draftBusy = false;
+    if (decision.draftMeta?.status === "refining") decision.draftMeta.status = decision.draftMeta.source === "anna" ? "ready" : "fallback";
+    if (activeDecision()?.id === decision.id) render();
+  }
+}
+
 async function runAnalysis(decision, type) {
   if (state.aiBusy) return;
   showBusy(
@@ -612,6 +672,7 @@ async function runAnalysis(decision, type) {
     }
     const analysis = normalizeAnalysis({ ...parsed, id: createId("analysis"), type, source: "anna", createdAt: new Date().toISOString() });
     decision.analyses.push(analysis);
+    if (type === "premortem" && analysis.premortem?.length) decision.premortem = analysis.premortem.map((item) => ({ ...item, id: createId("premortem") }));
     if (decision.analyses.length > 8) decision.analyses = decision.analyses.slice(-8);
     touch(decision);
     await saveNow();
@@ -620,6 +681,7 @@ async function runAnalysis(decision, type) {
   } catch (error) {
     const analysis = buildFallbackAnalysis(decision, type);
     decision.analyses.push(analysis);
+    if (type === "premortem" && analysis.premortem?.length) decision.premortem = analysis.premortem.map((item) => ({ ...item, id: createId("premortem") }));
     if (decision.analyses.length > 8) decision.analyses = decision.analyses.slice(-8);
     touch(decision);
     await saveNow();
@@ -702,10 +764,12 @@ app.addEventListener("submit", async (event) => {
       return;
     }
     const decision = createDecision({ title, context: data.get("context"), mode: data.get("mode"), deadline: data.get("deadline"), template: data.get("template") });
+    applyDecisionDraft(decision, buildFallbackDraft(decision), { source: "local" });
     state.store.decisions.unshift(decision);
     await saveNow();
     location.hash = decisionUrl(decision, "frame").slice(1);
-    toast("Decision room created. Start by refining the options.", "success");
+    toast("A first-pass decision draft is ready. Anna is refining it in the background.", "success");
+    void refineDecisionDraft(decision, { automatic: true });
   } else if (form.id === "commit-form") {
     const decision = activeDecision();
     if (!decision) return;
@@ -865,6 +929,7 @@ document.addEventListener("click", async (event) => {
   else if (action === "add-risk" && decision) {
     decision.risks.push({ id: createId("risk"), optionId: decision.options[0].id, text: "", likelihood: 3, impact: 3, mitigation: "" }); touch(decision); render();
   } else if (action === "remove-risk" && decision) { decision.risks = decision.risks.filter((item) => item.id !== trigger.dataset.id); touch(decision); render(); }
+  else if (action === "refine-draft" && decision) await refineDecisionDraft(decision);
   else if (action === "run-analysis" && decision) await runAnalysis(decision, trigger.dataset.type);
   else if (action === "coach-starter" && decision) {
     state.coachDraft = trigger.dataset.question || "";

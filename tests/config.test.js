@@ -6,12 +6,20 @@ const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
 
 test("Anna permissions declare the complete review-safe agent session shape", async () => {
   const manifest = await readJson("manifest.json");
+  assert.ok(manifest.permissions.includes("agent.session.auto"));
+  assert.ok(manifest.permissions.includes("llm.complete"));
+  assert.ok(manifest.permissions.includes("storage.read"));
+  assert.ok(manifest.permissions.includes("storage.write"));
   assert.deepEqual(manifest.ui.host_api.agent, {
     session: { auto: true, fixed: { client_ids: [] } },
     tools: [],
   });
   assert.deepEqual(manifest.required_executas, []);
   assert.deepEqual(manifest.optional_executas, []);
+  assert.deepEqual(manifest.ui.host_api.agent.tools, []);
+  assert.deepEqual(manifest.ui.host_api.llm, ["complete"]);
+  assert.deepEqual(manifest.ui.host_api.storage, ["get", "set", "delete", "list"]);
+  assert.match(manifest.system_prompt_addendum, /intentionally uses no Executa/i);
   assert.match(manifest.system_prompt_addendum, /never make the final decision/i);
 });
 

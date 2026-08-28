@@ -3,10 +3,18 @@ export const STORE_VERSION = 1;
 export const MAX_DECISIONS = 24;
 export const MAX_OPTIONS = 6;
 export const MAX_CRITERIA = 8;
+export const MAX_PREMORTEM_ITEMS = 5;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number(value) || 0));
 const clean = (value, max = 240) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 const cleanLong = (value, max = 4000) => String(value ?? "").trim().slice(0, max);
+const dateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? String(value) : "";
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next.toISOString().slice(0, 10);
+}
 
 export function createId(prefix = "item") {
   const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -131,6 +139,9 @@ export function createDecision(input = {}, now = new Date()) {
     risks: [],
     analyses: [],
     coach: [],
+    premortem: [],
+    draftMeta: null,
+    commitSuggestion: null,
     commitment: null,
     outcome: null,
   };
@@ -189,7 +200,26 @@ export function normalizeDecision(raw, now = new Date()) {
     source: message?.role === "assistant" && message?.source === "local" ? "local" : "anna",
     createdAt: clean(message?.createdAt, 40) || now.toISOString(),
   })).filter((message) => message.text) : [];
+  const premortem = Array.isArray(raw.premortem) ? raw.premortem.slice(0, MAX_PREMORTEM_ITEMS).map((item) => ({
+    id: clean(item?.id, 100) || createId("premortem"),
+    cause: clean(item?.cause, 500),
+    warning: clean(item?.warning, 500),
+    mitigation: clean(item?.mitigation, 600),
+  })).filter((item) => item.cause || item.warning || item.mitigation) : [];
+  const draftMeta = raw.draftMeta && typeof raw.draftMeta === "object" ? {
+    source: raw.draftMeta.source === "anna" ? "anna" : "local",
+    generatedAt: clean(raw.draftMeta.generatedAt, 40) || now.toISOString(),
+    reasoning: cleanLong(raw.draftMeta.reasoning, 1200),
+    clarifyingQuestions: Array.isArray(raw.draftMeta.clarifyingQuestions) ? raw.draftMeta.clarifyingQuestions.slice(0, 4).map((item) => clean(item, 500)).filter(Boolean) : [],
+    status: ["ready", "refining", "fallback", "error"].includes(raw.draftMeta.status) ? raw.draftMeta.status : "ready",
+  } : null;
   const optionIds = new Set(options.map((option) => option.id));
+  const commitSuggestion = raw.commitSuggestion && optionIds.has(raw.commitSuggestion.optionId) ? {
+    optionId: raw.commitSuggestion.optionId,
+    confidence: clamp(raw.commitSuggestion.confidence ?? 3, 1, 5),
+    rationale: cleanLong(raw.commitSuggestion.rationale, 1800),
+    nextAction: clean(raw.commitSuggestion.nextAction, 500),
+  } : null;
   const commitment = raw.commitment && optionIds.has(raw.commitment.optionId) ? {
     optionId: raw.commitment.optionId,
     confidence: clamp(raw.commitment.confidence ?? 3, 1, 5),
@@ -224,6 +254,9 @@ export function normalizeDecision(raw, now = new Date()) {
     risks,
     analyses,
     coach,
+    premortem,
+    draftMeta,
+    commitSuggestion,
     commitment,
     outcome,
   };
@@ -240,6 +273,170 @@ export function normalizeStore(raw) {
       reduceMotion: Boolean(raw?.preferences?.reduceMotion),
       compactMatrix: Boolean(raw?.preferences?.compactMatrix),
     },
+  };
+}
+
+function inferredOptions(decision) {
+  const title = clean(decision.title, 140).replace(/^\s*(should|shall|do)\s+(i|we)\s+/i, "").replace(/[?!.]+$/, "");
+  const split = title.split(/\s+(?:or|versus|vs\.?|\/),?\s+/i).map((item) => clean(item, 100)).filter(Boolean);
+  if (split.length >= 2) return split.slice(0, 3).map((item) => item.replace(/^whether\s+/i, ""));
+  const byTemplate = {
+    career: ["Accept the new opportunity", "Stay on the current path", "Negotiate a reversible trial"],
+    purchase: ["Buy the leading option", "Choose the alternative", "Delay and test the need"],
+    move: ["Move to the preferred location", "Stay where I am", "Run a short relocation experiment"],
+    venture: ["Pursue the opportunity", "Keep the current focus", "Run a constrained pilot"],
+    hire: ["Hire the leading candidate", "Continue the search", "Run a paid work sample"],
+  };
+  return byTemplate[decision.template] || ["Take the leading path", "Keep the current path", "Run a smaller reversible test"];
+}
+
+function inferredCriteria(decision) {
+  const template = TEMPLATES[decision.template] || TEMPLATES.blank;
+  return template.criteria.map(([name, weight], index) => ({
+    name,
+    weight,
+    description: [
+      "The outcome this decision is meant to improve.",
+      "How well the option fits the real situation.",
+      "The money, time, and effort required.",
+      "How easily you can learn or change course.",
+      "How well the choice fits your stated priorities.",
+    ][index] || "A factor that should be compared consistently.",
+  }));
+}
+
+function draftPremortem(options, criteria) {
+  const top = criteria[0]?.name || "the most important criterion";
+  const lead = options[0]?.name || "the leading option";
+  return [
+    { cause: `The ${top} benefit of ${lead} was overestimated.`, warning: "Early evidence is weaker than the score suggests.", mitigation: `Run one observable test of ${top} before making the commitment irreversible.` },
+    { cause: "A non-negotiable constraint was treated as flexible.", warning: "A required condition is repeatedly deferred or explained away.", mitigation: "Write the constraint down and define a stop condition before proceeding." },
+    { cause: "The decision ignored a credible third path.", warning: "The choice is framed as a forced either/or despite a pilot or hybrid.", mitigation: "Name one smaller, delayed, or negotiated option and score it explicitly." },
+    { cause: "The execution cost arrives later than the visible benefit.", warning: "The first weeks require more time, money, or support than expected.", mitigation: "Estimate the first 30 days and secure one concrete support or exit route." },
+    { cause: "New information is discounted because of sunk effort or emotion.", warning: "You defend the original choice more often than you update it.", mitigation: "Schedule a review date and decide in advance what evidence would change course." },
+  ];
+}
+
+export function buildFallbackDraft(decision, now = new Date()) {
+  const optionNames = inferredOptions(decision);
+  const criteria = inferredCriteria(decision);
+  const options = optionNames.map((name, optionIndex) => ({
+    name,
+    notes: optionIndex === 0 ? "AI-suggested starting point — verify the upside and constraints before relying on it." : "AI-suggested alternative — add the strongest evidence for and against this path.",
+  }));
+  const ratings = {};
+  const evidence = {};
+  options.forEach((option, optionIndex) => {
+    ratings[option.name] = {};
+    evidence[option.name] = {};
+    criteria.forEach((criterion, criterionIndex) => {
+      const rating = Math.min(5, Math.max(1, 3 + (optionIndex === 0 ? (criterionIndex === 0 ? 1 : 0) : optionIndex === 1 ? (criterionIndex === 2 ? 1 : 0) : (criterionIndex === 3 ? 1 : 0))));
+      ratings[option.name][criterion.name] = rating;
+      evidence[option.name][criterion.name] = `Draft hypothesis (${rating}/5): ${option.name} may be a ${rating >= 4 ? "strong" : rating <= 2 ? "weak" : "mixed"} fit for ${criterion.name}. Replace this with an observable fact.`;
+    });
+  });
+  return {
+    deadline: dateOnly(decision.deadline) || addDays(now, 30),
+    options,
+    criteria,
+    ratings,
+    evidence,
+    assumptions: [
+      { text: "The facts in the initial prompt are current and complete.", confidence: 3, evidence: "Confirm the most decision-critical fact before committing." },
+      { text: "The leading option can deliver its main benefit without breaking a non-negotiable constraint.", confidence: 3, evidence: "Name the constraint and the evidence that would test it." },
+      { text: "The criteria reflect what matters most over the decision horizon.", confidence: 3, evidence: "Ask which criterion you would defend if the option names were hidden." },
+    ],
+    risks: options.slice(0, 3).map((option, index) => ({ option: option.name, text: `${option.name} underdelivers on the highest-stakes constraint.`, likelihood: index === 0 ? 3 : 2, impact: 4, mitigation: "Run a small test and define a clear exit condition before scaling the choice." })),
+    premortem: draftPremortem(options, criteria),
+    clarifyingQuestions: decision.context ? ["Which fact in this context is least certain?", "What would make you change the current leading path?"] : ["What constraint is truly non-negotiable?", "What evidence would make you change the leading path?"],
+    reasoning: "I turned the initial prompt into an editable first pass. The scores and notes are hypotheses, not facts; review the assumptions and replace each draft rationale with evidence from your situation.",
+    commitSuggestion: { option: options[0]?.name, confidence: 3, rationale: `The first-pass comparison currently favors ${options[0]?.name || "the leading option"}, but the ranking is provisional until the highest-weighted criterion has direct evidence.`, nextAction: `Run one small test of ${criteria[0]?.name || "the top criterion"} before committing.` },
+  };
+}
+
+export function buildDecisionDraftPrompt(decision, now = new Date()) {
+  const fallback = buildFallbackDraft(decision, now);
+  return [
+    "You are the first-pass decision architect inside Decision Room AI.",
+    "Turn the user's initial decision question and context into a useful, editable analysis instead of a blank worksheet.",
+    "Propose 2–4 realistic options (include a pilot, hybrid, delay, or negotiated path when plausible), 3–6 criteria with weights that add to 100, initial 1–5 scores for every option/criterion, and a short reason for every score.",
+    "Infer a review deadline only when the prompt does not provide one; if inferred, make clear it is a suggested date.",
+    "Proactively surface assumptions, risks, overlooked trade-offs, 2–3 clarifying questions, and exactly five premortem causes with an early warning signal and mitigation.",
+    "Also draft a conditional commit recommendation, confidence, rationale, and next action.",
+    "Use only the supplied context; do not invent external facts. Return JSON only in this shape:",
+    JSON.stringify({ deadline: "YYYY-MM-DD", options: [{ name: "", notes: "" }], criteria: [{ name: "", weight: 20, description: "" }], scores: [{ option: "", criterion: "", rating: 1, reasoning: "" }], assumptions: [{ text: "", confidence: 3, evidence: "" }], risks: [{ option: "", text: "", likelihood: 3, impact: 3, mitigation: "" }], premortem: [{ cause: "", warning: "", mitigation: "" }], clarifyingQuestions: [""], commitSuggestion: { option: "", confidence: 3, rationale: "", nextAction: "" }, reasoning: "" }),
+    `TODAY: ${now.toISOString().slice(0, 10)}`,
+    `DECISION QUESTION: ${decision.title}`,
+    `CONTEXT: ${decision.context || "No additional context was supplied."}`,
+    `STARTER SHAPE (use only as a fallback, improve it when the context supports doing so): ${JSON.stringify({ options: fallback.options.map((item) => item.name), criteria: fallback.criteria.map((item) => item.name) })}`,
+  ].join("\n\n");
+}
+
+export function applyDecisionDraft(decision, raw, { source = "local", generatedAt = new Date().toISOString() } = {}) {
+  const candidate = raw && typeof raw === "object" ? raw : {};
+  const fallback = buildFallbackDraft(decision, new Date(generatedAt));
+  const rawOptions = Array.isArray(candidate.options) ? candidate.options : fallback.options;
+  const options = rawOptions.slice(0, MAX_OPTIONS).map((item, index) => ({ id: createId("option"), name: clean(item?.name, 100) || fallback.options[index]?.name || `Option ${index + 1}`, notes: cleanLong(item?.notes, 1800) || fallback.options[index]?.notes || "" }));
+  while (options.length < 2) options.push({ id: createId("option"), name: fallback.options[options.length]?.name || `Option ${options.length + 1}`, notes: "AI-suggested alternative — verify before relying on it." });
+  const rawCriteria = Array.isArray(candidate.criteria) ? candidate.criteria : fallback.criteria;
+  const criteria = rawCriteria.slice(0, MAX_CRITERIA).map((item, index) => ({ id: createId("criterion"), name: clean(item?.name, 100) || fallback.criteria[index]?.name || `Criterion ${index + 1}`, weight: clamp(item?.weight ?? fallback.criteria[index]?.weight ?? 10, 1, 100), description: clean(item?.description, 300) || fallback.criteria[index]?.description || "A factor to compare consistently." }));
+  while (criteria.length < 2) criteria.push({ id: createId("criterion"), name: fallback.criteria[criteria.length]?.name || `Criterion ${criteria.length + 1}`, weight: 10, description: "A factor to compare consistently." });
+  const lookup = (collection, value, fallbackIndex) => {
+    const key = clean(value, 100).toLowerCase();
+    const index = collection.findIndex((item) => item.name.toLowerCase() === key);
+    return collection[index >= 0 ? index : Math.min(fallbackIndex, collection.length - 1)];
+  };
+  const scoreItems = Array.isArray(candidate.scores) ? candidate.scores : [];
+  const ratings = Object.fromEntries(options.map((option) => [option.id, Object.fromEntries(criteria.map((criterion) => [criterion.id, 3]))]));
+  const evidence = Object.fromEntries(options.map((option) => [option.id, Object.fromEntries(criteria.map((criterion) => [criterion.id, "Draft hypothesis — replace with an observable fact."]))]));
+  options.forEach((option, optionIndex) => criteria.forEach((criterion, criterionIndex) => {
+    const item = scoreItems.find((entry) => lookup(options, entry?.option, optionIndex)?.name === option.name && lookup(criteria, entry?.criterion, criterionIndex)?.name === criterion.name);
+    const fallbackRating = fallback.ratings[fallback.options[optionIndex]?.name]?.[fallback.criteria[criterionIndex]?.name] || 3;
+    ratings[option.id][criterion.id] = clamp(item?.rating ?? fallbackRating, 1, 5);
+    evidence[option.id][criterion.id] = cleanLong(item?.reasoning, 800) || `Draft hypothesis (${ratings[option.id][criterion.id]}/5): verify how ${option.name} fits ${criterion.name}.`;
+  }));
+  const assumptions = (Array.isArray(candidate.assumptions) ? candidate.assumptions : fallback.assumptions).slice(0, 16).map((item) => ({ id: createId("assumption"), text: clean(item?.text, 500), confidence: clamp(item?.confidence ?? 3, 1, 5), evidence: clean(item?.evidence, 600) })).filter((item) => item.text);
+  const risks = (Array.isArray(candidate.risks) ? candidate.risks : fallback.risks).slice(0, 16).map((item, index) => ({ id: createId("risk"), optionId: lookup(options, item?.option, index)?.id || options[0].id, text: clean(item?.text, 500), likelihood: clamp(item?.likelihood ?? 3, 1, 5), impact: clamp(item?.impact ?? 3, 1, 5), mitigation: clean(item?.mitigation, 600) })).filter((item) => item.text);
+  const premortem = (Array.isArray(candidate.premortem) ? candidate.premortem : fallback.premortem).slice(0, MAX_PREMORTEM_ITEMS).map((item) => ({ id: createId("premortem"), cause: clean(item?.cause, 500), warning: clean(item?.warning, 500), mitigation: clean(item?.mitigation, 600) })).filter((item) => item.cause || item.warning || item.mitigation);
+  const leaderOption = lookup(options, candidate.commitSuggestion?.option, 0) || options[0];
+  decision.options = options;
+  decision.criteria = criteria;
+  decision.ratings = ratings;
+  decision.evidence = evidence;
+  decision.deadline = dateOnly(candidate.deadline) || dateOnly(fallback.deadline);
+  decision.assumptions = assumptions;
+  decision.risks = risks;
+  decision.premortem = premortem.length ? premortem : fallback.premortem;
+  decision.commitSuggestion = {
+    optionId: leaderOption.id,
+    confidence: clamp(candidate.commitSuggestion?.confidence ?? 3, 1, 5),
+    rationale: cleanLong(candidate.commitSuggestion?.rationale, 1800) || `The first-pass comparison currently favors ${leaderOption.name}, but the ranking is provisional until the highest-weighted criterion has direct evidence.`,
+    nextAction: clean(candidate.commitSuggestion?.nextAction, 500) || `Run one small test of ${criteria[0].name} before committing.`,
+  };
+  decision.draftMeta = {
+    source: source === "anna" ? "anna" : "local",
+    generatedAt,
+    reasoning: cleanLong(candidate.reasoning, 1200) || fallback.reasoning,
+    clarifyingQuestions: (Array.isArray(candidate.clarifyingQuestions) ? candidate.clarifyingQuestions : fallback.clarifyingQuestions).slice(0, 4).map((item) => clean(item, 500)).filter(Boolean),
+    status: source === "anna" ? "ready" : "fallback",
+  };
+  return decision;
+}
+
+export function compareInsight(decision) {
+  const scores = calculateScores(decision);
+  const leader = scores[0];
+  const runnerUp = scores[1];
+  const topCriterion = decision.criteria.slice().sort((a, b) => b.weight - a.weight)[0];
+  const sensitivity = sensitivityAnalysis(decision);
+  const strongest = leader?.contributions?.[0];
+  return {
+    headline: leader ? `${leader.name} leads the first-pass comparison.` : "Add options to compare the decision.",
+    summary: leader ? `${leader.name} is ahead by ${runnerUp ? (leader.score - runnerUp.score).toFixed(1) : "0"} points. This is a directional read of the current inputs, not an objective verdict.` : "The room needs at least two named options before Anna can compare them.",
+    reason: leader && strongest ? `The lead is carried most by ${strongest.name} (${strongest.rating}/5), contributing ${strongest.points.toFixed(1)} points to the current score.` : "Each rating contributes to the normalized score.",
+    weight: topCriterion ? `${topCriterion.name} has the highest current weight (${topCriterion.weight}). A change here matters more than a small shift in a low-weight criterion.` : "Weights are normalized automatically.",
+    sensitivity: sensitivity.stable ? "The current leader survives a practical ±20-point weight test." : sensitivity.summary,
+    evidence: leader ? `${leader.evidenceCoverage}% of the leader's rating cells have supporting notes.` : "Add evidence notes to make the comparison defensible.",
   };
 }
 
@@ -324,6 +521,7 @@ export function sensitivityAnalysis(decision) {
 export function normalizeAnalysis(raw) {
   if (!raw || typeof raw !== "object") return null;
   const list = (value, max = 8) => Array.isArray(value) ? value.slice(0, max).map((item) => clean(item, 600)).filter(Boolean) : [];
+  const premortem = Array.isArray(raw.premortem) ? raw.premortem.slice(0, MAX_PREMORTEM_ITEMS).map((item) => ({ cause: clean(item?.cause, 500), warning: clean(item?.warning, 500), mitigation: clean(item?.mitigation, 600) })).filter((item) => item.cause || item.warning || item.mitigation) : [];
   return {
     id: clean(raw.id, 100) || createId("analysis"),
     type: ["challenger", "premortem", "scenarios", "advisor"].includes(raw.type) ? raw.type : "advisor",
@@ -337,6 +535,7 @@ export function normalizeAnalysis(raw) {
     experiments: list(raw.experiments),
     recommendation: cleanLong(raw.recommendation, 1200),
     caveat: cleanLong(raw.caveat, 700),
+    premortem,
   };
 }
 
@@ -380,6 +579,7 @@ export function buildFallbackAnalysis(decision, type = "advisor") {
     ],
     recommendation: leader ? `Treat ${leader.name} as a working hypothesis, not a verdict. Test the highest-impact uncertainty, record what you learn, and then rescore before committing.` : "Complete the option comparison, record evidence, and test one important uncertainty before committing.",
     caveat: "This fallback uses no external research and cannot verify the accuracy of the user-supplied ratings or notes.",
+    premortem: type === "premortem" ? draftPremortem(decision.options, decision.criteria) : [],
   });
 }
 
@@ -446,7 +646,7 @@ export function buildAnalysisPrompt(decision, type) {
       if (note) evidenceLines.push(`- ${option.name} / ${criterion.name}: ${note}`);
     }
   }
-  return `ANALYSIS MODE: ${analysisLabels[type] || analysisLabels.advisor}\n\nDECISION\n${decision.title}\n\nCONTEXT\n${decision.context || "No additional context provided."}\n\nOPTIONS AND CURRENT SCORES\n${scores.map((item) => `- ${item.name}: ${item.score}/100; evidence coverage ${item.evidenceCoverage}%`).join("\n")}\n\nCRITERIA\n${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}\n\nEVIDENCE NOTES\n${evidenceLines.join("\n") || "No evidence notes recorded yet."}\n\nASSUMPTIONS\n${decision.assumptions.map((item) => `- ${item.text} (confidence ${item.confidence}/5)`).join("\n") || "None recorded."}\n\nRISKS\n${decision.risks.map((item) => `- ${item.text} (likelihood ${item.likelihood}/5, impact ${item.impact}/5)`).join("\n") || "None recorded."}\n\nReturn exactly one JSON object with this shape:\n{\n  "headline": "specific insight, not a generic title",\n  "summary": "concise evidence-aware synthesis",\n  "blindSpots": ["missing fact, bias, or assumption"],\n  "questions": ["high-value question to answer next"],\n  "scenarios": ["scenario and what would make it more likely"],\n  "experiments": ["small reversible action that reduces uncertainty"],\n  "recommendation": "conditional recommendation that names the evidence behind it",\n  "caveat": "what the available information cannot establish"\n}\nUse only the user's supplied decision data. Treat scores as subjective inputs, not facts. Never claim external research or certainty. Return JSON only.`;
+  return `ANALYSIS MODE: ${analysisLabels[type] || analysisLabels.advisor}\n\nDECISION\n${decision.title}\n\nCONTEXT\n${decision.context || "No additional context provided."}\n\nOPTIONS AND CURRENT SCORES\n${scores.map((item) => `- ${item.name}: ${item.score}/100; evidence coverage ${item.evidenceCoverage}%`).join("\n")}\n\nCRITERIA\n${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}\n\nEVIDENCE NOTES\n${evidenceLines.join("\n") || "No evidence notes recorded yet."}\n\nASSUMPTIONS\n${decision.assumptions.map((item) => `- ${item.text} (confidence ${item.confidence}/5)`).join("\n") || "None recorded."}\n\nRISKS\n${decision.risks.map((item) => `- ${item.text} (likelihood ${item.likelihood}/5, impact ${item.impact}/5)`).join("\n") || "None recorded."}\n\nReturn exactly one JSON object with this shape:\n{\n  "headline": "specific insight, not a generic title",\n  "summary": "concise evidence-aware synthesis",\n  "blindSpots": ["missing fact, bias, or assumption"],\n  "questions": ["high-value question to answer next"],\n  "scenarios": ["scenario and what would make it more likely"],\n  "experiments": ["small reversible action that reduces uncertainty"],\n  "recommendation": "conditional recommendation that names the evidence behind it",\n  "caveat": "what the available information cannot establish",\n  "premortem": [{"cause":"failure cause","warning":"early warning signal","mitigation":"preventive action"}]\n}\nFor PREMORTEM mode, return exactly five premortem items. Use only the user's supplied decision data. Treat scores as subjective inputs, not facts. Never claim external research or certainty. Return JSON only.`;
 }
 
 export function buildCoachPrompt(decision, question) {
@@ -501,7 +701,9 @@ export function duplicateDecision(decision, now = new Date()) {
       copy.evidence[newOptionId][newCriterionId] = decision.evidence?.[oldOption.id]?.[oldCriterion.id] ?? "";
     }
   }
+  if (copy.commitSuggestion) copy.commitSuggestion.optionId = ids.get(decision.commitSuggestion?.optionId) || copy.options[0].id;
   copy.assumptions = copy.assumptions.map((item) => ({ ...item, id: createId("assumption") }));
   copy.risks = copy.risks.map((item) => ({ ...item, id: createId("risk"), optionId: ids.get(item.optionId) || copy.options[0].id }));
+  copy.premortem = copy.premortem.map((item) => ({ ...item, id: createId("premortem") }));
   return copy;
 }

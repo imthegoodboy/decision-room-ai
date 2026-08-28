@@ -3,35 +3,51 @@
 Public source: https://github.com/imthegoodboy/decision-room-ai
 
 Decision Room AI is a structured decision-making workspace for Anna. It helps
-people frame a consequential choice, compare options against weighted criteria,
-challenge their assumptions with Anna's LLM, commit deliberately, and review the
-real outcome later.
+people start with one plain-language choice, then lets Anna draft the first
+decision model: realistic options, a deadline, weighted criteria, initial scores
+with reasoning, clarifying questions, assumptions, risks, and a five-cause
+premortem. The user reviews that draft, compares trade-offs, challenges the
+evidence, commits deliberately, and reviews the real outcome later.
 
 ## Product workflow
 
 ```text
 Frame the decision
-  -> define options and weighted criteria
-  -> score the evidence
+  -> Anna drafts options, deadline, criteria, scores, and questions
+  -> review the evidence and edit the draft
   -> run AI challenge and scenario analysis
-  -> record a commitment
+  -> review Anna's conditional recommendation and record a commitment
   -> review the outcome
 ```
 
-The scoring engine is deterministic and fully editable. Anna's LLM adds a
-separate advisory layer; it never silently changes scores or makes the final
-choice. Personal decisions are stored in bounded Anna Storage shards and fall
-back to the current browser only when previewed outside Anna. Existing
-single-key workspaces migrate automatically, while the shard layout prevents a
-large decision library from exceeding Anna's per-value storage limit.
+The first draft uses the active room only. Anna's LLM can refine it through the
+host `llm.complete` capability, while a deterministic local draft keeps the
+first-use path usable when Anna is unavailable. Every generated score and note
+is labelled as a hypothesis, remains editable, and never silently changes a
+user's decision or commits on their behalf. Personal decisions are stored in
+bounded Anna Storage shards and fall back to the current browser only when
+previewed outside Anna. Existing single-key workspaces migrate automatically,
+while the shard layout prevents a large decision library from exceeding Anna's
+per-value storage limit.
 
-Release-one features include six decision templates, weighted comparison,
-evidence notes, sensitivity and readiness lenses, assumption/risk registers,
-four AI analysis modes, a contextual Coach conversation, commitment and outcome
-reviews, search/filter/history, duplication, JSON backup/restore, and a printable
-decision brief. If a hosted model is unavailable or returns no visible text, the
-app keeps the workflow usable with a clearly labelled local fallback derived
-only from the room's saved inputs.
+Features include six decision templates, an AI-first editable draft, suggested
+weights and scores, clarifying questions, evidence notes, sensitivity and
+readiness lenses, assumption/risk registers, a five-cause premortem, four AI
+analysis modes, a contextual Coach conversation, an editable Commit
+recommendation, commitment and outcome reviews, search/filter/history,
+duplication, JSON backup/restore, and a printable decision brief. If a hosted
+model is unavailable or returns no visible text, the app keeps the workflow
+usable with a clearly labelled local fallback derived only from the room's
+saved inputs.
+
+## Anna architecture and permissions
+
+Decision Room AI intentionally has no Executa. It is a static UI that uses the
+Anna host APIs for `llm.complete`, `storage.get/set/delete/list`, and window
+readiness/title updates. The manifest declares `llm.complete`,
+`storage.read`, `storage.write`, and `agent.session.auto`, including the nested
+`ui.host_api.agent.session.auto` shape required by the Anna permission editor.
+No provider API key, external tool, or hidden network service is required.
 
 ## Local development
 
@@ -60,5 +76,5 @@ from the default deterministic test suite.
 
 See `DEPLOY.md` for the release checklist.
 
-Anna app identity: `decision-room-ai`, version `1.0.1`, app id `218`. See
-`DEPLOY.md` for the exact installed candidate and Marketplace review state.
+Anna app identity: `decision-room-ai`, version `1.1.0`, app id `218`. See
+`DEPLOY.md` for the release checklist and Marketplace review state.

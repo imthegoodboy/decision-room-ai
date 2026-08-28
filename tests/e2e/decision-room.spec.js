@@ -43,7 +43,7 @@ test("complete frame-to-outcome workflow works inside the Anna harness", async (
 
   await frame.getByRole("link", { name: /Challenge/ }).last().click();
   await frame.getByRole("button", { name: /Add/ }).first().click();
-  await frame.locator('[data-assumption-field="text"]').fill("The new manager will preserve the promised autonomy.");
+  await frame.locator('[data-assumption-field="text"]').last().fill("The new manager will preserve the promised autonomy.");
   await frame.getByRole("button", { name: "Challenge my thinking" }).click();
   await expect(frame.getByRole("heading", { name: "The score gap rests on evidence you have not written down" })).toBeVisible({ timeout: 20_000 });
 
@@ -85,6 +85,41 @@ test("first-use flow needs one question and keeps its primary action in the defa
   await action.click();
   await expect(frame.getByRole("heading", { name: /Name what is really at stake/ })).toBeVisible();
   await expect(frame.getByText("Quick room", { exact: true })).toBeVisible();
+});
+
+test("AI-first draft covers framing, comparison, premortem, and commitment", async ({ page }) => {
+  const frame = await openRoom(page);
+  await frame.getByRole("link", { name: /Open a new room/ }).click();
+  await frame.getByText("Career move", { exact: true }).click();
+  await frame.getByLabel("What decision are you facing?").fill("Should I relocate to Shanghai or stay in my remote role?");
+  await frame.getByText("Refine the setup", { exact: true }).click();
+  await frame.getByLabel("What context should the room understand?").fill("Shanghai pays more and may improve career growth, while the remote role makes family caregiving easier.");
+  await frame.getByRole("button", { name: /Enter the room/ }).click();
+
+  await expect(frame.getByRole("heading", { name: "A working analysis, not a blank worksheet." })).toBeVisible();
+  await expect(frame.locator('[data-option-field="name"]')).toHaveCount(2);
+  await expect(frame.locator('[data-criterion-field="name"]')).toHaveCount(5);
+  await expect(frame.locator('[data-decision-field="deadline"]')).not.toHaveValue("");
+  await expect(frame.locator(".draft-questions li")).toHaveCount(2);
+
+  await frame.getByRole("link", { name: /Compare options/ }).click();
+  await expect(frame.getByRole("heading", { name: /leads the first-pass comparison/i })).toBeVisible();
+  await expect(frame.locator(".compare-ai__signals > div")).toHaveCount(4);
+  await expect(frame.locator("[data-evidence]").first()).toHaveValue(/Draft hypothesis/i);
+
+  await frame.getByRole("link", { name: /Challenge/ }).last().click();
+  await expect(frame.getByRole("heading", { name: /If this decision fails/i })).toBeVisible();
+  await expect(frame.locator(".premortem-item")).toHaveCount(5);
+
+  await frame.getByRole("link", { name: /Commit/ }).last().click();
+  await expect(frame.getByText("Anna drafted this from your room.", { exact: false })).toBeVisible();
+  await expect(frame.getByLabel("Chosen option")).not.toHaveValue("");
+  await expect(frame.getByLabel("Why this option?")).not.toHaveValue("");
+  await expect(frame.getByLabel("First concrete action")).not.toHaveValue("");
+  await frame.getByLabel("Review date").fill("2026-12-01");
+  await frame.getByRole("button", { name: /Record my decision/ }).click();
+  await frame.getByRole("link", { name: /Review/ }).last().click();
+  await expect(frame.getByText("Dec 1, 2026", { exact: true })).toBeVisible();
 });
 
 test("library search, duplication, export, and settings are usable", async ({ page }) => {
