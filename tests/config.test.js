@@ -6,7 +6,7 @@ const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
 
 test("Anna permissions declare the complete review-safe agent session shape", async () => {
   const manifest = await readJson("manifest.json");
-  assert.ok(manifest.permissions.includes("agent.session.auto"));
+  assert.ok(!manifest.permissions.includes("agent.session.auto"), "agent.session.auto is a UI host submode, not a top-level permission token");
   assert.ok(manifest.permissions.includes("llm.complete"));
   assert.ok(manifest.permissions.includes("storage.read"));
   assert.ok(manifest.permissions.includes("storage.write"));

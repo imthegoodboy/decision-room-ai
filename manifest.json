@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "permissions": ["llm.complete", "storage.read", "storage.write", "agent.session.auto"],
+  "permissions": ["llm.complete", "storage.read", "storage.write"],
   "host_capabilities": ["llm.complete", "aps.kv"],
   "required_executas": [],
   "optional_executas": [],
