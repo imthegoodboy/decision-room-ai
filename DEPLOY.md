@@ -10,15 +10,21 @@ provider API key, external service, or bundled Executa to install.
 
 ## Release identity
 
-Candidate to push and cut:
+Submitted review candidate:
 
 ```text
 app id: 218
 slug: decision-room-ai
 name: Decision Room AI
 candidate version: 1.1.0
+version id: 594
+bundle id: 567
+review status: pending_review
+review candidate: 1.1.0
+public: no (awaiting Anna approval)
 architecture: UI + Anna LLM + Anna Storage; no Executa
 source: https://github.com/imthegoodboy/decision-room-ai
+source commit: 5b0544086abe2e5a928c4508bc90260fa41177e6
 ```
 
 Keep `app.json`, `package.json`, `package-lock.json`, and this candidate version
@@ -91,6 +97,12 @@ anna-app apps status decision-room-ai --account $ANNA_HOST --json
 used for testing/review. `submit-review` requests Marketplace review; it does
 not make the app public. Install the exact cut version from the Developer page,
 then repeat the workflow and permission save inside Anna.
+
+The production submission completed on 2026-08-30: `apps push` produced a ready
+7-file bundle, `apps cut 1.1.0` created version id `594` with bundle id `567`,
+and `apps submit-review` pinned candidate `1.1.0`. `apps sync-meta` uploaded all
+six screenshots and the logo. The app remains `pending_review` and must not be
+released before approval.
 
 `anna-app apps grants decision-room-ai --account $ANNA_HOST --json` confirms the
 installed version, enabled state, complete LLM/storage/agent-session grants,
