@@ -107,8 +107,10 @@ creation flow, compact stage headers, the compact first-draft schema expanded
 into the normal editable model, a 4,096-token Anna grant ceiling, serialized
 draft/analysis/Coach calls, bounded LLM retries, updated listing captures, and a
 live Anna test that passed the automatic draft plus grounded Coach path. Do not
-record the new immutable version id or bundle hash here until the CLI cut returns
-them; append those values after `apps cut 1.1.1`.
+The CLI cut completed with version id `606`, bundle id `579`, 7 files, and
+manifest SHA-256 `5ad483bb1c22d774b17e0226fbd1595a36ad9cf52ed39c37fbee76063635a1f2`.
+`apps sync-meta` uploaded six refreshed English screenshots and the logo. The
+candidate is pinned for review; it is not public until Anna approves it.
 
 `anna-app apps grants decision-room-ai --account $ANNA_HOST --json` confirms the
 installed version, enabled state, complete LLM/storage/agent-session grants,
