@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("Anna's live LLM completes structured analysis and Coach chat", async ({ page }) => {
+test("Anna's live LLM completes the automatic first draft and grounded Coach chat", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
@@ -13,14 +13,20 @@ test("Anna's live LLM completes structured analysis and Coach chat", async ({ pa
   await frame.getByLabel("What decision are you facing?").fill("Should I accept a product lead role or stay with my current team?");
   await frame.getByText("Refine the setup", { exact: true }).click();
   await frame.getByLabel("What context should the room understand?").fill("The offer increases scope and learning, but adds a longer commute. I can ask for a two-week trial commute before deciding.");
-  await frame.getByRole("button", { name: /Enter the room/ }).click();
+  await frame.getByRole("button", { name: /Build my first draft/ }).click();
 
-  await frame.getByRole("link", { name: /Challenge/ }).last().click();
-  await frame.getByRole("button", { name: "Challenge my thinking" }).click();
-  await expect(frame.locator(".analysis-sheet")).toBeVisible();
-  await expect(frame.locator(".analysis-sheet .analysis-type")).toContainText("Anna");
-  await expect(frame.locator(".analysis-sheet .analysis-summary")).not.toBeEmpty();
+  const draftAction = frame.getByRole("button", { name: /with Anna/ });
+  await expect(draftAction).toBeEnabled({ timeout: 240_000 });
+  const draftSource = frame.locator(".draft-studio .eyebrow");
+  if (!String(await draftSource.textContent()).includes("Anna first draft")) {
+    await draftAction.click();
+    await expect(draftAction).toBeEnabled({ timeout: 240_000 });
+  }
+  await expect(draftSource).toContainText("Anna first draft");
+  await expect(frame.locator(".draft-questions li")).toHaveCount(2);
 
+  await frame.getByRole("link", { name: /03 Challenge/ }).click();
+  await expect(frame.getByRole("link", { name: /Ask the Coach/ })).toBeVisible();
   await frame.getByRole("link", { name: /Ask the Coach/ }).click();
   await frame.getByRole("button", { name: /What assumption should I test first/ }).click();
   await frame.getByRole("button", { name: "Send" }).click();

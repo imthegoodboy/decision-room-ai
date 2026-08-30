@@ -340,20 +340,41 @@ function buildDecisionDraftPrompt(decision, now = /* @__PURE__ */ new Date()) {
   return [
     "You are the first-pass decision architect inside Decision Room AI.",
     "Turn the user's initial decision question and context into a useful, editable analysis instead of a blank worksheet.",
-    "Propose 2\u20134 realistic options (include a pilot, hybrid, delay, or negotiated path when plausible), 3\u20136 criteria with weights that add to 100, initial 1\u20135 scores for every option/criterion, and a short reason for every score.",
-    "Infer a review deadline only when the prompt does not provide one; if inferred, make clear it is a suggested date.",
-    "Proactively surface assumptions, risks, overlooked trade-offs, 2\u20133 clarifying questions, and exactly five premortem causes with an early warning signal and mitigation.",
-    "Also draft a conditional commit recommendation, confidence, rationale, and next action.",
-    "Use only the supplied context; do not invent external facts. Return JSON only in this shape:",
-    JSON.stringify({ deadline: "YYYY-MM-DD", options: [{ name: "", notes: "" }], criteria: [{ name: "", weight: 20, description: "" }], scores: [{ option: "", criterion: "", rating: 1, reasoning: "" }], assumptions: [{ text: "", confidence: 3, evidence: "" }], risks: [{ option: "", text: "", likelihood: 3, impact: 3, mitigation: "" }], premortem: [{ cause: "", warning: "", mitigation: "" }], clarifyingQuestions: [""], commitSuggestion: { option: "", confidence: 3, rationale: "", nextAction: "" }, reasoning: "" }),
+    "Propose 2\u20133 realistic options (include a pilot, hybrid, delay, or negotiated path when plausible), exactly 4 criteria with integer weights that add to 100, initial 1\u20135 scores for every option/criterion, and one concise reason for every score.",
+    "Infer a review deadline only when the prompt does not provide one. The d value must be only YYYY-MM-DD with no explanation.",
+    "Proactively surface exactly 3 assumptions, one risk per option, 2 clarifying questions, and exactly five premortem causes with an early warning signal and mitigation.",
+    "Also draft a conditional commit recommendation, confidence, rationale, and next action. Never make the final decision.",
+    "Use only the supplied context; do not invent external facts. Keep every string under 14 words and the visible response under 1200 tokens.",
+    "Return one minified JSON object only. Use this compact schema (array indexes in s, r, and m refer to o and c):",
+    JSON.stringify({ d: "YYYY-MM-DD", o: [["option", "note"]], c: [["criterion", 25, "why it matters"]], s: [[0, 0, 3, "score reason"]], a: [["assumption", 3, "evidence or test"]], r: [[0, "risk", 3, 4, "mitigation"]], p: [["failure cause", "early warning", "mitigation"]], q: ["question"], m: [0, 3, "conditional rationale", "next action"], why: "brief overview" }),
     `TODAY: ${now.toISOString().slice(0, 10)}`,
     `DECISION QUESTION: ${decision.title}`,
     `CONTEXT: ${decision.context || "No additional context was supplied."}`,
     `STARTER SHAPE (use only as a fallback, improve it when the context supports doing so): ${JSON.stringify({ options: fallback.options.map((item) => item.name), criteria: fallback.criteria.map((item) => item.name) })}`
   ].join("\n\n");
 }
+function expandCompactDraft(raw) {
+  if (!raw || typeof raw !== "object" || !Array.isArray(raw.o) && !Array.isArray(raw.c)) return raw;
+  const options = (Array.isArray(raw.o) ? raw.o : []).map((item) => ({ name: item?.[0], notes: item?.[1] }));
+  const criteria = (Array.isArray(raw.c) ? raw.c : []).map((item) => ({ name: item?.[0], weight: item?.[1], description: item?.[2] }));
+  const optionName = (index) => options[Number(index)]?.name || options[0]?.name || "";
+  const criterionName = (index) => criteria[Number(index)]?.name || criteria[0]?.name || "";
+  return {
+    deadline: raw.d,
+    options,
+    criteria,
+    scores: (Array.isArray(raw.s) ? raw.s : []).map((item) => ({ option: optionName(item?.[0]), criterion: criterionName(item?.[1]), rating: item?.[2], reasoning: item?.[3] })),
+    assumptions: (Array.isArray(raw.a) ? raw.a : []).map((item) => ({ text: item?.[0], confidence: item?.[1], evidence: item?.[2] })),
+    risks: (Array.isArray(raw.r) ? raw.r : []).map((item) => ({ option: optionName(item?.[0]), text: item?.[1], likelihood: item?.[2], impact: item?.[3], mitigation: item?.[4] })),
+    premortem: (Array.isArray(raw.p) ? raw.p : []).map((item) => ({ cause: item?.[0], warning: item?.[1], mitigation: item?.[2] })),
+    clarifyingQuestions: Array.isArray(raw.q) ? raw.q : [],
+    commitSuggestion: Array.isArray(raw.m) ? { option: optionName(raw.m[0]), confidence: raw.m[1], rationale: raw.m[2], nextAction: raw.m[3] } : {},
+    reasoning: raw.why
+  };
+}
 function applyDecisionDraft(decision, raw, { source = "local", generatedAt = (/* @__PURE__ */ new Date()).toISOString() } = {}) {
-  const candidate = raw && typeof raw === "object" ? raw : {};
+  const expanded = expandCompactDraft(raw);
+  const candidate = expanded && typeof expanded === "object" ? expanded : {};
   const fallback = buildFallbackDraft(decision, new Date(generatedAt));
   const rawOptions = Array.isArray(candidate.options) ? candidate.options : fallback.options;
   const options = rawOptions.slice(0, MAX_OPTIONS).map((item, index) => ({ id: createId("option"), name: clean(item?.name, 100) || fallback.options[index]?.name || `Option ${index + 1}`, notes: cleanLong(item?.notes, 1800) || fallback.options[index]?.notes || "" }));
@@ -915,10 +936,19 @@ var DecisionPlatform = class {
     if (!this.anna?.llm?.complete) {
       throw new Error("Open Decision Room AI inside Anna to run AI analysis. Your scoring workspace still works in preview mode.");
     }
-    const response = await this.anna.llm.complete(request, { timeoutMs: 18e4 });
-    const text = llmText(response);
-    if (!text) throw new Error("Anna returned an empty analysis. Please retry.");
-    return text;
+    let lastError = new Error("Anna returned an empty analysis. Please retry.");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await this.anna.llm.complete(request, { timeoutMs: 1e5 });
+        const text = llmText(response);
+        if (text) return text;
+        lastError = new Error("Anna returned an empty analysis. Please retry.");
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 650));
+    }
+    throw lastError;
   }
 };
 
@@ -936,6 +966,7 @@ var state = {
   selectedTemplate: "blank",
   aiBusy: false,
   draftBusy: false,
+  draftPromise: null,
   coachBusy: false,
   coachDraft: "",
   saving: false,
@@ -1145,11 +1176,14 @@ function templateIcon(key) {
 }
 function renderNew() {
   return shell(`<div class="page page--new">
-    <header class="new-intro reveal"><a class="text-link" href="#/home">${icon("arrow", "icon--back")} Back to decisions</a><p class="eyebrow">Open a decision room</p><h1>First, name the<br><em>real choice.</em></h1><p>One clear question is enough. Compare the real options, ask Anna to challenge the evidence, then record a decision you can revisit.</p></header>
+    <header class="new-toolbar reveal">
+      <a class="text-link" href="#/home">${icon("arrow", "icon--back")} Back to decisions</a>
+      <p><span>New room</span><small>Anna builds the first draft</small></p>
+    </header>
     <form id="new-decision-form" class="new-composer reveal">
-      <fieldset class="template-fieldset"><legend>Choose a starting frame</legend><div class="template-grid">${Object.entries(TEMPLATES).map(([key, template]) => `<label class="template-choice ${state.selectedTemplate === key ? "is-selected" : ""}"><input type="radio" name="template" value="${key}" ${state.selectedTemplate === key ? "checked" : ""}><span class="template-mark">${templateIcon(key)}</span><span><small>${escapeHtml(template.eyebrow)}</small><strong>${escapeHtml(template.name)}</strong></span></label>`).join("")}</div></fieldset>
       <div class="composer-core">
-        <label class="field field--hero"><span>What decision are you facing?</span><textarea name="title" id="new-title" rows="2" maxlength="140" required placeholder="${attr(TEMPLATES[state.selectedTemplate].prompt)}"></textarea><small class="field-guidance">Write it as one concrete choice. You can refine every detail inside the room.</small></label>
+        <div class="new-prompt-heading"><div><p class="eyebrow">Start here</p><h1>What are you deciding?</h1></div><p>Anna proposes the options, criteria, scores, risks, and questions for you to review.</p></div>
+        <label class="field field--hero"><span class="sr-only">What decision are you facing?</span><textarea name="title" id="new-title" rows="2" maxlength="140" required placeholder="${attr(TEMPLATES[state.selectedTemplate].prompt)}"></textarea><small class="field-guidance">Describe one concrete choice. Everything stays editable.</small></label>
         <details class="composer-details">
           <summary><span><strong>Refine the setup</strong><small>Optional context, deadline, and depth</small></span>${icon("arrow")}</summary>
           <div class="composer-details__body">
@@ -1157,8 +1191,9 @@ function renderNew() {
             <div class="composer-row"><fieldset class="mode-switch"><legend>Depth</legend><label><input type="radio" name="mode" value="quick" checked><span>Quick</span></label><label><input type="radio" name="mode" value="deep"><span>Deep</span></label></fieldset><label class="field field--date"><span>Decision date <small>Optional</small></span><input type="date" name="deadline"></label></div>
           </div>
         </details>
-        <div class="composer-action"><p>Anna will turn this prompt into an editable first draft of options, criteria, scores, and the questions worth answering.</p><button class="button button--accent button--nested" type="submit"><span>Enter the room \xB7 build first draft</span><i>${icon("arrow")}</i></button></div>
+        <div class="composer-action"><p>Your decision stays yours. Anna prepares the analysis.</p><button class="button button--accent button--nested" type="submit"><span>Build my first draft</span><i>${icon("arrow")}</i></button></div>
       </div>
+      <fieldset class="template-fieldset"><legend><span>Optional starting frames</span><small>Choose one only if it helps.</small></legend><div class="template-grid">${Object.entries(TEMPLATES).map(([key, template]) => `<label class="template-choice ${state.selectedTemplate === key ? "is-selected" : ""}"><input type="radio" name="template" value="${key}" ${state.selectedTemplate === key ? "checked" : ""}><span class="template-mark">${templateIcon(key)}</span><span><small>${escapeHtml(template.eyebrow)}</small><strong>${escapeHtml(template.name)}</strong></span></label>`).join("")}</div></fieldset>
     </form>
   </div>`);
 }
@@ -1470,8 +1505,8 @@ async function refineDecisionDraft(decision, { automatic = false } = {}) {
   try {
     const text = await state.platform.complete({
       messages: [{ role: "user", content: { type: "text", text: buildDecisionDraftPrompt(decision, /* @__PURE__ */ new Date()) } }],
-      systemPrompt: "You are Decision Room's first-pass decision architect. Build an editable draft from the user's supplied decision only. Propose realistic options, weighted criteria, initial scores with reasoning, assumptions, risks, clarifying questions, exactly five premortem causes with warning signals and mitigations, and a conditional commit draft. Never invent external facts or make the final decision. Return JSON only.",
-      maxTokens: 5200,
+      systemPrompt: "You are Decision Room's first-pass decision architect. Think silently, then follow the user's compact JSON schema exactly. Keep the visible response under 1200 tokens, use short strings, never invent external facts, and never make the final decision. Return minified JSON only.",
+      maxTokens: 4096,
       temperature: 0.2
     });
     const parsed = parseStructuredJson(text);
@@ -1495,6 +1530,10 @@ async function refineDecisionDraft(decision, { automatic = false } = {}) {
 }
 async function runAnalysis(decision, type) {
   if (state.aiBusy) return;
+  if (state.draftPromise) {
+    showBusy("Finishing the first draft", "Anna is completing the initial room before starting another analysis.");
+    await state.draftPromise;
+  }
   showBusy(
     type === "premortem" ? "Imagining the failure before it happens" : type === "scenarios" ? "Opening three possible futures" : type === "challenger" ? "Looking for the uncomfortable question" : "Turning uncertainty into next steps",
     "Anna is reading only the evidence and assumptions in this room."
@@ -1504,7 +1543,7 @@ async function runAnalysis(decision, type) {
     let text = await state.platform.complete({
       messages: [{ role: "user", content: { type: "text", text: prompt } }],
       systemPrompt: "You are Decision Room's rigorous decision advisor. Stay grounded in the supplied decision data, distinguish evidence from assumptions, and prefer conditional advice and reversible experiments over certainty. Return valid JSON only.",
-      maxTokens: 4200,
+      maxTokens: 3200,
       temperature: 0.2
     });
     let parsed;
@@ -1516,7 +1555,7 @@ async function runAnalysis(decision, type) {
 
 ${text}` } }],
         systemPrompt: "Repair malformed JSON. Output JSON only.",
-        maxTokens: 3200,
+        maxTokens: 2600,
         temperature: 0
       });
       parsed = parseStructuredJson(text);
@@ -1554,10 +1593,11 @@ async function sendCoachMessage(decision, question) {
   render();
   requestAnimationFrame(() => document.getElementById("chat-log")?.lastElementChild?.scrollIntoView({ block: "end", behavior: state.store.preferences.reduceMotion ? "auto" : "smooth" }));
   try {
+    if (state.draftPromise) await state.draftPromise;
     const text = await state.platform.complete({
       messages: [{ role: "user", content: { type: "text", text: buildCoachPrompt(decision, cleanQuestion) } }],
       systemPrompt: "You are Decision Room's concise decision coach. Use only the active room context. Distinguish recorded evidence from inference, challenge kindly, prefer reversible next steps, and never make the decision for the user.",
-      maxTokens: 2600,
+      maxTokens: 2e3,
       temperature: 0.35
     });
     decision.coach.push({ id: createId("message"), role: "assistant", source: "anna", text: formatCoachResponse(text), createdAt: (/* @__PURE__ */ new Date()).toISOString() });
@@ -1616,7 +1656,11 @@ app.addEventListener("submit", async (event) => {
     await saveNow();
     location.hash = decisionUrl(decision, "frame").slice(1);
     toast("A first-pass decision draft is ready. Anna is refining it in the background.", "success");
-    void refineDecisionDraft(decision, { automatic: true });
+    const draftRequest = refineDecisionDraft(decision, { automatic: true });
+    state.draftPromise = draftRequest;
+    void draftRequest.finally(() => {
+      if (state.draftPromise === draftRequest) state.draftPromise = null;
+    });
   } else if (form.id === "commit-form") {
     const decision = activeDecision();
     if (!decision) return;

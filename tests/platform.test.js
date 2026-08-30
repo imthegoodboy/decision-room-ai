@@ -106,3 +106,23 @@ test("overlapping edits are serialized so a slower old save cannot overwrite new
   const restored = await reader.load();
   assert.equal(restored.decisions[0].title, "Newest title");
 });
+
+test("Anna LLM completion retries one transient failure with a bounded timeout", async () => {
+  const calls = [];
+  const platform = new DecisionPlatform();
+  platform.anna = {
+    llm: {
+      async complete(request, options) {
+        calls.push({ request, options });
+        if (calls.length === 1) throw new Error("temporary route timeout");
+        return { content: { text: "Recovered Anna response" } };
+      },
+    },
+  };
+
+  const result = await platform.complete({ messages: [] });
+
+  assert.equal(result, "Recovered Anna response");
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map(({ options }) => options.timeoutMs), [100000, 100000]);
+});

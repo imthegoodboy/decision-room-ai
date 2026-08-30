@@ -16,12 +16,12 @@ async function openRoom(page) {
 
 async function createCareerDecision(frame) {
   await frame.getByRole("link", { name: /Open a new room/ }).click();
-  await expect(frame.getByRole("heading", { name: /First, name the real choice/ })).toBeVisible();
+  await expect(frame.getByRole("heading", { name: /What are you deciding/ })).toBeVisible();
   await frame.getByText("Career move", { exact: true }).click();
   await frame.getByLabel("What decision are you facing?").fill("Should I accept the product lead offer?");
   await frame.getByText("Refine the setup", { exact: true }).click();
   await frame.getByLabel("What context should the room understand?").fill("The role offers more scope, but it changes my commute and gives up a trusted team.");
-  await frame.getByRole("button", { name: /Enter the room/ }).click();
+  await frame.getByRole("button", { name: /Build my first draft/ }).click();
   await expect(frame.getByRole("heading", { name: /Name what is really at stake/ })).toBeVisible();
 }
 
@@ -68,13 +68,15 @@ test("complete frame-to-outcome workflow works inside the Anna harness", async (
   expect(errors).toEqual([]);
 });
 
-test("first-use flow needs one question and keeps its primary action in the default Anna viewport", async ({ page }) => {
+test("first-use flow centers the decision prompt and keeps its primary action in the default Anna viewport", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 820 });
   const frame = await openRoom(page);
   await frame.getByRole("link", { name: /Open a new room/ }).click();
-  await expect(frame.getByText("One clear question is enough", { exact: false })).toBeVisible();
+  await expect(frame.getByRole("heading", { name: /What are you deciding/ })).toBeVisible();
+  await expect(frame.getByText("First, name the", { exact: false })).toHaveCount(0);
+  await expect(frame.getByText("One clear question is enough", { exact: false })).toHaveCount(0);
   await expect(frame.getByText("Optional context, deadline, and depth", { exact: true })).toBeVisible();
-  const action = frame.getByRole("button", { name: /Enter the room/ });
+  const action = frame.getByRole("button", { name: /Build my first draft/ });
   await expect(action).toBeVisible();
   const actionBox = await action.boundingBox();
   const appBox = await page.locator("iframe#app").boundingBox();
@@ -94,7 +96,7 @@ test("AI-first draft covers framing, comparison, premortem, and commitment", asy
   await frame.getByLabel("What decision are you facing?").fill("Should I relocate to Shanghai or stay in my remote role?");
   await frame.getByText("Refine the setup", { exact: true }).click();
   await frame.getByLabel("What context should the room understand?").fill("Shanghai pays more and may improve career growth, while the remote role makes family caregiving easier.");
-  await frame.getByRole("button", { name: /Enter the room/ }).click();
+  await frame.getByRole("button", { name: /Build my first draft/ }).click();
 
   await expect(frame.getByRole("heading", { name: "A working analysis, not a blank worksheet." })).toBeVisible();
   await expect(frame.locator('[data-option-field="name"]')).toHaveCount(2);
@@ -149,7 +151,7 @@ test("Anna Storage restores an in-progress room after reopen", async ({ page }) 
   await frame.getByRole("link", { name: /Open a new room/ }).click();
   await frame.getByText("Major purchase", { exact: true }).click();
   await frame.getByLabel("What decision are you facing?").fill("Which laptop should I buy for client work?");
-  await frame.getByRole("button", { name: /Enter the room/ }).click();
+  await frame.getByRole("button", { name: /Build my first draft/ }).click();
   await frame.locator('[data-option-field="name"]').first().fill("Portable model");
   await frame.locator('[data-option-field="notes"]').first().fill("Fits the travel bag and supports the required tools.");
   await expect(frame.getByText("Saved to Anna", { exact: true })).toBeVisible();

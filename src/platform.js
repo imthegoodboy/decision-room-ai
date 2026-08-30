@@ -162,9 +162,18 @@ export class DecisionPlatform {
     if (!this.anna?.llm?.complete) {
       throw new Error("Open Decision Room AI inside Anna to run AI analysis. Your scoring workspace still works in preview mode.");
     }
-    const response = await this.anna.llm.complete(request, { timeoutMs: 180000 });
-    const text = llmText(response);
-    if (!text) throw new Error("Anna returned an empty analysis. Please retry.");
-    return text;
+    let lastError = new Error("Anna returned an empty analysis. Please retry.");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await this.anna.llm.complete(request, { timeoutMs: 100000 });
+        const text = llmText(response);
+        if (text) return text;
+        lastError = new Error("Anna returned an empty analysis. Please retry.");
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 650));
+    }
+    throw lastError;
   }
 }

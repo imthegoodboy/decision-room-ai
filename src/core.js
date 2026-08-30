@@ -359,12 +359,13 @@ export function buildDecisionDraftPrompt(decision, now = new Date()) {
   return [
     "You are the first-pass decision architect inside Decision Room AI.",
     "Turn the user's initial decision question and context into a useful, editable analysis instead of a blank worksheet.",
-    "Propose 2–4 realistic options (include a pilot, hybrid, delay, or negotiated path when plausible), 3–6 criteria with weights that add to 100, initial 1–5 scores for every option/criterion, and a short reason for every score.",
-    "Infer a review deadline only when the prompt does not provide one; if inferred, make clear it is a suggested date.",
-    "Proactively surface assumptions, risks, overlooked trade-offs, 2–3 clarifying questions, and exactly five premortem causes with an early warning signal and mitigation.",
-    "Also draft a conditional commit recommendation, confidence, rationale, and next action.",
-    "Use only the supplied context; do not invent external facts. Return JSON only in this shape:",
-    JSON.stringify({ deadline: "YYYY-MM-DD", options: [{ name: "", notes: "" }], criteria: [{ name: "", weight: 20, description: "" }], scores: [{ option: "", criterion: "", rating: 1, reasoning: "" }], assumptions: [{ text: "", confidence: 3, evidence: "" }], risks: [{ option: "", text: "", likelihood: 3, impact: 3, mitigation: "" }], premortem: [{ cause: "", warning: "", mitigation: "" }], clarifyingQuestions: [""], commitSuggestion: { option: "", confidence: 3, rationale: "", nextAction: "" }, reasoning: "" }),
+    "Propose 2–3 realistic options (include a pilot, hybrid, delay, or negotiated path when plausible), exactly 4 criteria with integer weights that add to 100, initial 1–5 scores for every option/criterion, and one concise reason for every score.",
+    "Infer a review deadline only when the prompt does not provide one. The d value must be only YYYY-MM-DD with no explanation.",
+    "Proactively surface exactly 3 assumptions, one risk per option, 2 clarifying questions, and exactly five premortem causes with an early warning signal and mitigation.",
+    "Also draft a conditional commit recommendation, confidence, rationale, and next action. Never make the final decision.",
+    "Use only the supplied context; do not invent external facts. Keep every string under 14 words and the visible response under 1200 tokens.",
+    "Return one minified JSON object only. Use this compact schema (array indexes in s, r, and m refer to o and c):",
+    JSON.stringify({ d: "YYYY-MM-DD", o: [["option", "note"]], c: [["criterion", 25, "why it matters"]], s: [[0, 0, 3, "score reason"]], a: [["assumption", 3, "evidence or test"]], r: [[0, "risk", 3, 4, "mitigation"]], p: [["failure cause", "early warning", "mitigation"]], q: ["question"], m: [0, 3, "conditional rationale", "next action"], why: "brief overview" }),
     `TODAY: ${now.toISOString().slice(0, 10)}`,
     `DECISION QUESTION: ${decision.title}`,
     `CONTEXT: ${decision.context || "No additional context was supplied."}`,
@@ -372,8 +373,29 @@ export function buildDecisionDraftPrompt(decision, now = new Date()) {
   ].join("\n\n");
 }
 
+function expandCompactDraft(raw) {
+  if (!raw || typeof raw !== "object" || (!Array.isArray(raw.o) && !Array.isArray(raw.c))) return raw;
+  const options = (Array.isArray(raw.o) ? raw.o : []).map((item) => ({ name: item?.[0], notes: item?.[1] }));
+  const criteria = (Array.isArray(raw.c) ? raw.c : []).map((item) => ({ name: item?.[0], weight: item?.[1], description: item?.[2] }));
+  const optionName = (index) => options[Number(index)]?.name || options[0]?.name || "";
+  const criterionName = (index) => criteria[Number(index)]?.name || criteria[0]?.name || "";
+  return {
+    deadline: raw.d,
+    options,
+    criteria,
+    scores: (Array.isArray(raw.s) ? raw.s : []).map((item) => ({ option: optionName(item?.[0]), criterion: criterionName(item?.[1]), rating: item?.[2], reasoning: item?.[3] })),
+    assumptions: (Array.isArray(raw.a) ? raw.a : []).map((item) => ({ text: item?.[0], confidence: item?.[1], evidence: item?.[2] })),
+    risks: (Array.isArray(raw.r) ? raw.r : []).map((item) => ({ option: optionName(item?.[0]), text: item?.[1], likelihood: item?.[2], impact: item?.[3], mitigation: item?.[4] })),
+    premortem: (Array.isArray(raw.p) ? raw.p : []).map((item) => ({ cause: item?.[0], warning: item?.[1], mitigation: item?.[2] })),
+    clarifyingQuestions: Array.isArray(raw.q) ? raw.q : [],
+    commitSuggestion: Array.isArray(raw.m) ? { option: optionName(raw.m[0]), confidence: raw.m[1], rationale: raw.m[2], nextAction: raw.m[3] } : {},
+    reasoning: raw.why,
+  };
+}
+
 export function applyDecisionDraft(decision, raw, { source = "local", generatedAt = new Date().toISOString() } = {}) {
-  const candidate = raw && typeof raw === "object" ? raw : {};
+  const expanded = expandCompactDraft(raw);
+  const candidate = expanded && typeof expanded === "object" ? expanded : {};
   const fallback = buildFallbackDraft(decision, new Date(generatedAt));
   const rawOptions = Array.isArray(candidate.options) ? candidate.options : fallback.options;
   const options = rawOptions.slice(0, MAX_OPTIONS).map((item, index) => ({ id: createId("option"), name: clean(item?.name, 100) || fallback.options[index]?.name || `Option ${index + 1}`, notes: cleanLong(item?.notes, 1800) || fallback.options[index]?.notes || "" }));

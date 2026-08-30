@@ -55,9 +55,32 @@ test("AI draft and comparison prompts make the proactive role explicit", () => {
   const insight = compareInsight(decision);
   assert.match(prompt, /exactly five premortem causes/i);
   assert.match(prompt, /initial 1–5 scores/i);
+  assert.match(prompt, /visible response under 1200 tokens/i);
   assert.match(insight.headline, /leads/i);
   assert.match(insight.reason, /contributing/i);
   assert.match(insight.sensitivity, /weight|leader/i);
+});
+
+test("compact Anna draft schema expands into the complete editable room", () => {
+  const decision = createDecision({ title: "Should I launch now or run a pilot?", context: "Customer evidence is incomplete." });
+  applyDecisionDraft(decision, {
+    d: "2026-09-30",
+    o: [["Launch now", "Move quickly."], ["Run a pilot", "Test the riskiest assumption."]],
+    c: [["Learning", 60, "Reduce uncertainty."], ["Speed", 40, "Capture timing value."]],
+    s: [[0, 0, 2, "Little direct evidence."], [0, 1, 5, "Fastest path."], [1, 0, 5, "Produces evidence."], [1, 1, 3, "Adds one week."]],
+    a: [["The opportunity remains available.", 3, "Confirm the deadline."]],
+    r: [[0, "Launch misses a key need.", 3, 5, "Stage the rollout."], [1, "Pilot delays learning.", 2, 3, "Time-box it."]],
+    p: [["Wrong need", "Low activation", "Interview users"], ["Slow launch", "Milestones slip", "Time-box scope"], ["Weak demand", "No repeats", "Test retention"], ["Cost overrun", "Budget rises", "Cap spend"], ["Team overload", "Work queues", "Reduce scope"]],
+    q: ["Which assumption is least certain?"],
+    m: [1, 3, "Pilot first while evidence is thin.", "Run a one-week pilot."],
+    why: "The pilot buys evidence before a larger commitment.",
+  }, { source: "anna", generatedAt: "2026-08-30T00:00:00Z" });
+  assert.equal(decision.options[1].name, "Run a pilot");
+  assert.equal(decision.criteria[0].weight, 60);
+  assert.equal(decision.ratings[decision.options[1].id][decision.criteria[0].id], 5);
+  assert.equal(decision.premortem.length, 5);
+  assert.equal(decision.commitSuggestion.optionId, decision.options[1].id);
+  assert.equal(decision.draftMeta.source, "anna");
 });
 
 test("weighted scores are normalized to a transparent 0-100 scale", () => {

@@ -15,7 +15,7 @@ test("capture native Anna app views for visual QA", async ({ page }) => {
   await frame.getByLabel("What decision are you facing?").fill("Should I accept the product lead offer?");
   await frame.getByText("Refine the setup", { exact: true }).click();
   await frame.getByLabel("What context should the room understand?").fill("The role offers more scope, but changes my commute and gives up a trusted team.");
-  await frame.getByRole("button", { name: /Enter the room/ }).click();
+  await frame.getByRole("button", { name: /Build my first draft/ }).click();
   await expect(frame.getByRole("heading", { name: /Name what is really at stake/ })).toBeVisible();
   await expect(frame.locator(".draft-studio")).toBeVisible();
   const dismiss = frame.getByRole("button", { name: "Dismiss message" });

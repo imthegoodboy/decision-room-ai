@@ -10,21 +10,19 @@ provider API key, external service, or bundled Executa to install.
 
 ## Release identity
 
-Submitted review candidate:
+Candidate to push and cut:
 
 ```text
 app id: 218
 slug: decision-room-ai
 name: Decision Room AI
-candidate version: 1.1.0
-version id: 594
-bundle id: 567
-review status: pending_review
-review candidate: 1.1.0
+candidate version: 1.1.1
+previous submitted version: 1.1.0 (version id 594, bundle id 567)
+review status before resubmission: pending_review
+review candidate before resubmission: 1.1.0
 public: no (awaiting Anna approval)
 architecture: UI + Anna LLM + Anna Storage; no Executa
 source: https://github.com/imthegoodboy/decision-room-ai
-source commit: 5b0544086abe2e5a928c4508bc90260fa41177e6
 ```
 
 Keep `app.json`, `package.json`, `package-lock.json`, and this candidate version
@@ -72,7 +70,7 @@ The intended new identity is:
 ```text
 slug: decision-room-ai
 name: Decision Room AI
-version: 1.1.0
+version: 1.1.1
 architecture: UI + Anna LLM + Anna Storage; no Executa
 ```
 
@@ -86,7 +84,7 @@ git push origin main
 
 anna-app whoami --json
 anna-app apps push --account $ANNA_HOST --json
-anna-app apps cut 1.1.0 --account $ANNA_HOST --json
+anna-app apps cut 1.1.1 --account $ANNA_HOST --json
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
 anna-app apps versions decision-room-ai --account $ANNA_HOST --json
 anna-app apps submit-review decision-room-ai --account $ANNA_HOST --json
@@ -98,11 +96,19 @@ used for testing/review. `submit-review` requests Marketplace review; it does
 not make the app public. Install the exact cut version from the Developer page,
 then repeat the workflow and permission save inside Anna.
 
-The production submission completed on 2026-08-30: `apps push` produced a ready
-7-file bundle, `apps cut 1.1.0` created version id `594` with bundle id `567`,
-and `apps submit-review` pinned candidate `1.1.0`. `apps sync-meta` uploaded all
-six screenshots and the logo. The app remains `pending_review` and must not be
-released before approval.
+The previous production submission completed on 2026-08-30: `apps push` produced
+a ready 7-file bundle, `apps cut 1.1.0` created version id `594` with bundle id
+`567`, and `apps submit-review` pinned candidate `1.1.0`. `apps sync-meta`
+uploaded all six screenshots and the logo. The app remained `pending_review` and
+was not released before Anna approval.
+
+Version 1.1.1 is the next candidate. It includes the full-width prompt-first
+creation flow, compact stage headers, the compact first-draft schema expanded
+into the normal editable model, a 4,096-token Anna grant ceiling, serialized
+draft/analysis/Coach calls, bounded LLM retries, updated listing captures, and a
+live Anna test that passed the automatic draft plus grounded Coach path. Do not
+record the new immutable version id or bundle hash here until the CLI cut returns
+them; append those values after `apps cut 1.1.1`.
 
 `anna-app apps grants decision-room-ai --account $ANNA_HOST --json` confirms the
 installed version, enabled state, complete LLM/storage/agent-session grants,
@@ -115,7 +121,7 @@ $ANNA_HOST = "https://anna.partners"
 cd C:\Users\parth\Desktop\anna-decision-room-ai
 
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
-anna-app apps release 1.1.0 --slug decision-room-ai --account $ANNA_HOST --json
+anna-app apps release 1.1.1 --slug decision-room-ai --account $ANNA_HOST --json
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
 anna-app apps versions decision-room-ai --account $ANNA_HOST --json
 ```
@@ -130,10 +136,10 @@ The listing declares six English screenshots generated from the native harness:
 
 ```text
 home-desktop.png
+create-desktop.png
 ai-draft-desktop.png
 ai-compare-desktop.png
 ai-premortem-desktop.png
-ai-commit-desktop.png
 coach-mobile.png
 ```
 
