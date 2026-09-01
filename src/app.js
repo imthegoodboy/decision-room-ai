@@ -15,12 +15,14 @@ import {
   confidenceLens,
   createDecision,
   createId,
+  dateOnly,
   decisionProgress,
   duplicateDecision,
   formatCoachResponse,
   normalizeAnalysis,
   normalizeStore,
   parseStructuredJson,
+  isDecisionDraftPayload,
   sensitivityAnalysis,
 } from "./core.js";
 import { icon } from "./icons.js";
@@ -55,10 +57,20 @@ const escapeHtml = (value) => String(value ?? "")
   .replaceAll("'", "&#039;");
 
 const attr = escapeHtml;
-const shortDate = (value) => value ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(value)) : "Not set";
+function parseDisplayDate(value) {
+  const normalized = dateOnly(value);
+  const parsed = normalized ? new Date(`${normalized}T12:00:00`) : new Date(value || "");
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+const shortDate = (value) => {
+  const date = parseDisplayDate(value);
+  return date ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(date) : "Not set";
+};
 const relativeDate = (value) => {
-  if (!value) return "Not set";
-  const days = Math.round((new Date(value).getTime() - Date.now()) / 86400000);
+  const date = parseDisplayDate(value);
+  if (!date) return "Not set";
+  const days = Math.round((date.getTime() - Date.now()) / 86400000);
   if (days === 0) return "Today";
   if (days === 1) return "Tomorrow";
   if (days === -1) return "Yesterday";
@@ -290,7 +302,7 @@ function renderNew() {
           <summary><span><strong>Refine the setup</strong><small>Optional context, deadline, and depth</small></span>${icon("arrow")}</summary>
           <div class="composer-details__body">
             <label class="field"><span>What context should the room understand?</span><textarea name="context" rows="3" maxlength="2400" placeholder="What changed, what is at stake, and what constraints matter?"></textarea></label>
-            <div class="composer-row"><fieldset class="mode-switch"><legend>Depth</legend><label><input type="radio" name="mode" value="quick" checked><span>Quick</span></label><label><input type="radio" name="mode" value="deep"><span>Deep</span></label></fieldset><label class="field field--date"><span>Decision date <small>Optional</small></span><input type="date" name="deadline"></label></div>
+            <div class="composer-row"><fieldset class="mode-switch"><legend>Depth</legend><label><input type="radio" name="mode" value="quick" checked><span>Quick</span></label><label><input type="radio" name="mode" value="deep"><span>Deep</span></label></fieldset><label class="field field--date"><span>Decision deadline <small>Optional</small></span><input type="date" name="deadline"></label></div>
           </div>
         </details>
         <div class="composer-action"><p>Your decision stays yours. Anna prepares the analysis.</p><button class="button button--accent button--nested" type="submit"><span>Build my first draft</span><i>${icon("arrow")}</i></button></div>
@@ -319,7 +331,7 @@ function draftStudio(decision) {
   return `<section class="draft-studio reveal" aria-labelledby="draft-studio-title">
     <div class="draft-studio__mark">${icon("spark")}</div>
     <div class="draft-studio__copy"><p class="eyebrow">${escapeHtml(status)}</p><h2 id="draft-studio-title">A working analysis, not a blank worksheet.</h2><p>${escapeHtml(meta.reasoning || "Review Anna's suggestions, then correct anything that does not match your situation.")}</p>
-      <div class="draft-facts"><span><strong>${decision.options.length}</strong> options</span><span><strong>${decision.criteria.length}</strong> criteria</span><span><strong>${decision.premortem.length || 5}</strong> premortem causes</span><span><strong>${decision.deadline ? shortDate(decision.deadline) : "Not set"}</strong> review date</span></div>
+      <div class="draft-facts"><span><strong>${decision.options.length}</strong> options</span><span><strong>${decision.criteria.length}</strong> criteria</span><span><strong>${decision.premortem.length || 5}</strong> premortem causes</span><span><strong>${decision.deadline ? shortDate(decision.deadline) : "Not set"}</strong> decision deadline</span></div>
       ${meta.clarifyingQuestions?.length ? `<div class="draft-questions"><strong>Questions to tighten the draft</strong><ul>${meta.clarifyingQuestions.map((question) => `<li>${escapeHtml(question)}</li>`).join("")}</ul></div>` : ""}
     </div><button class="button button--quiet" type="button" data-action="refine-draft" ${state.draftBusy ? "disabled" : ""}>${icon("spark")} ${meta.source === "anna" ? "Refresh with Anna" : "Refine with Anna"}</button>
   </section>`;
@@ -334,7 +346,7 @@ function renderFrame(decision) {
         <div class="section-heading"><div><p class="eyebrow">Decision statement</p><h2>The question</h2></div><span class="mode-badge">${decision.mode === "quick" ? "Quick room" : "Deep room"}</span></div>
         <label class="field field--hero"><span>Decision</span><textarea data-decision-field="title" maxlength="140" rows="2">${escapeHtml(decision.title)}</textarea></label>
         <label class="field"><span>Context</span><textarea data-decision-field="context" maxlength="2400" rows="5" placeholder="What changed, what is at stake, and what would a good outcome look like?">${escapeHtml(decision.context)}</textarea></label>
-        <label class="field field--date"><span>Decision date <small>Optional</small></span><input data-decision-field="deadline" type="date" value="${attr(decision.deadline)}"></label>
+        <label class="field field--date"><span>Decision deadline <small>Optional</small></span><input data-decision-field="deadline" type="date" value="${attr(decision.deadline)}"></label>
       </div></div>
       <aside class="frame-note"><span class="note-number">01</span><p>Write the choice so a thoughtful outsider could understand it in one reading.</p><blockquote>“Which path best serves the next twelve months?” is stronger than “What should I do?”</blockquote></aside>
     </section>
@@ -587,7 +599,15 @@ function removeOption(decision, id) {
   delete decision.ratings[id];
   delete decision.evidence[id];
   decision.risks = decision.risks.filter((risk) => risk.optionId !== id);
-  if (decision.commitment?.optionId === id) decision.commitment = null;
+  if (decision.commitment?.optionId === id) {
+    decision.commitment = null;
+    decision.outcome = null;
+    decision.status = "draft";
+  }
+  if (decision.commitSuggestion?.optionId === id) {
+    const nextLeader = calculateScores(decision)[0];
+    decision.commitSuggestion = nextLeader ? { ...decision.commitSuggestion, optionId: nextLeader.optionId } : null;
+  }
   touch(decision);
   render();
 }
@@ -630,6 +650,7 @@ async function refineDecisionDraft(decision, { automatic = false } = {}) {
       temperature: 0.2,
     });
     const parsed = parseStructuredJson(text);
+    if (!isDecisionDraftPayload(parsed)) throw new Error("Anna returned an incomplete first draft.");
     if (automatic && decision.updatedAt !== baseline) {
       decision.draftMeta.status = decision.draftMeta.source === "anna" ? "ready" : "fallback";
       return;
@@ -979,6 +1000,20 @@ window.addEventListener("hashchange", () => {
   window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   document.getElementById("workspace")?.focus({ preventScroll: true });
 });
+
+let previousScrollY = 0;
+window.addEventListener("scroll", () => {
+  const nav = document.querySelector(".mobile-stage-nav");
+  if (!nav) {
+    previousScrollY = window.scrollY;
+    return;
+  }
+  const delta = window.scrollY - previousScrollY;
+  if (Math.abs(delta) >= 4) {
+    nav.classList.toggle("is-hidden", delta > 0 && window.scrollY > 120);
+    previousScrollY = window.scrollY;
+  }
+}, { passive: true });
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !modalRoot.hidden) {

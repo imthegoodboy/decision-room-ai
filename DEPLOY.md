@@ -16,10 +16,10 @@ Candidate to push and cut:
 app id: 218
 slug: decision-room-ai
 name: Decision Room AI
-candidate version: 1.1.1
-previous submitted version: 1.1.0 (version id 594, bundle id 567)
+candidate version: 1.1.2
+previous submitted version: 1.1.1 (version id 606, bundle id 579)
 review status before resubmission: pending_review
-review candidate before resubmission: 1.1.0
+review candidate before resubmission: 1.1.1
 public: no (awaiting Anna approval)
 architecture: UI + Anna LLM + Anna Storage; no Executa
 source: https://github.com/imthegoodboy/decision-room-ai
@@ -70,7 +70,7 @@ The intended new identity is:
 ```text
 slug: decision-room-ai
 name: Decision Room AI
-version: 1.1.1
+version: 1.1.2
 architecture: UI + Anna LLM + Anna Storage; no Executa
 ```
 
@@ -84,7 +84,7 @@ git push origin main
 
 anna-app whoami --json
 anna-app apps push --account $ANNA_HOST --json
-anna-app apps cut 1.1.1 --account $ANNA_HOST --json
+anna-app apps cut 1.1.2 --account $ANNA_HOST --json
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
 anna-app apps versions decision-room-ai --account $ANNA_HOST --json
 anna-app apps submit-review decision-room-ai --account $ANNA_HOST --json
@@ -102,15 +102,20 @@ a ready 7-file bundle, `apps cut 1.1.0` created version id `594` with bundle id
 uploaded all six screenshots and the logo. The app remained `pending_review` and
 was not released before Anna approval.
 
-Version 1.1.1 is the next candidate. It includes the full-width prompt-first
+Version 1.1.1 introduced the full-width prompt-first
 creation flow, compact stage headers, the compact first-draft schema expanded
 into the normal editable model, a 4,096-token Anna grant ceiling, serialized
 draft/analysis/Coach calls, bounded LLM retries, updated listing captures, and a
-live Anna test that passed the automatic draft plus grounded Coach path. Do not
-The CLI cut completed with version id `606`, bundle id `579`, 7 files, and
+live Anna test that passed the automatic draft plus grounded Coach path. Its
+CLI cut completed with version id `606`, bundle id `579`, 7 files, and
 manifest SHA-256 `5ad483bb1c22d774b17e0226fbd1595a36ad9cf52ed39c37fbee76063635a1f2`.
 `apps sync-meta` uploaded six refreshed English screenshots and the logo. The
 candidate is pinned for review; it is not public until Anna approves it.
+
+Version 1.1.2 is the next candidate. It adds strict first-draft schema
+validation, empty-response retries, calendar-safe dates, consistent commitment
+cleanup when options are removed, responsive stage-header stacking, and a
+mobile stage bar that moves out of the way while users read or edit long views.
 
 `anna-app apps grants decision-room-ai --account $ANNA_HOST --json` confirms the
 installed version, enabled state, complete LLM/storage/agent-session grants,
@@ -123,7 +128,7 @@ $ANNA_HOST = "https://anna.partners"
 cd C:\Users\parth\Desktop\anna-decision-room-ai
 
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
-anna-app apps release 1.1.1 --slug decision-room-ai --account $ANNA_HOST --json
+anna-app apps release 1.1.2 --slug decision-room-ai --account $ANNA_HOST --json
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
 anna-app apps versions decision-room-ai --account $ANNA_HOST --json
 ```

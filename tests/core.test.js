@@ -20,6 +20,7 @@ import {
   normalizeDecision,
   normalizeStore,
   parseStructuredJson,
+  isDecisionDraftPayload,
   sensitivityAnalysis,
 } from "../src/core.js";
 
@@ -81,6 +82,33 @@ test("compact Anna draft schema expands into the complete editable room", () => 
   assert.equal(decision.premortem.length, 5);
   assert.equal(decision.commitSuggestion.optionId, decision.options[1].id);
   assert.equal(decision.draftMeta.source, "anna");
+});
+
+test("draft validation rejects an unrelated analysis payload", () => {
+  const challenger = { headline: "The score gap rests on evidence", summary: "A challenger response." };
+  assert.equal(isDecisionDraftPayload(challenger), false);
+  const decision = createDecision({ title: "Choose a path" });
+  assert.throws(() => applyDecisionDraft(decision, challenger, { source: "anna" }), /incomplete first draft/i);
+});
+
+test("malformed stored dates are cleared instead of rendering invalid dates", () => {
+  const decision = normalizeDecision({
+    title: "Choose a path",
+    deadline: "not-a-date",
+    commitment: { optionId: "option-1", reviewDate: "not-a-date" },
+  });
+  assert.equal(decision.deadline, "");
+  assert.equal(decision.commitment, null);
+});
+
+test("impossible calendar dates are rejected", () => {
+  const decision = normalizeDecision({
+    title: "Calendar safety",
+    deadline: "2026-02-31",
+    commitment: { optionId: "missing", reviewDate: "2026-13-40" },
+  });
+  assert.equal(decision.deadline, "");
+  assert.equal(decision.commitment, null);
 });
 
 test("weighted scores are normalized to a transparent 0-100 scale", () => {

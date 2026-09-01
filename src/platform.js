@@ -30,7 +30,7 @@ function splitDecision(decision) {
 }
 
 function llmText(response) {
-  return response?.content?.text || response?.result?.content?.text || response?.text || "";
+  return String(response?.content?.text || response?.result?.content?.text || response?.text || "").trim();
 }
 
 export class DecisionPlatform {

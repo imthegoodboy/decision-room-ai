@@ -1204,6 +1204,7 @@ textarea {
 
 .stage-heading {
   max-width: 850px;
+  min-width: 0;
 }
 
 .stage-heading h1 {
@@ -3675,6 +3676,16 @@ kbd {
     gap: 48px;
   }
 
+  .stage-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .stage-meta {
+    padding-bottom: 0;
+  }
+
   .stage-tabs a {
     justify-content: center;
     padding-inline: 8px;
@@ -3687,7 +3698,7 @@ kbd {
 
 @media (max-width: 900px) {
   body {
-    padding-bottom: 76px;
+    padding-bottom: max(76px, calc(76px + env(safe-area-inset-bottom)));
   }
 
   .app-shell {
@@ -3737,7 +3748,7 @@ kbd {
   .mobile-stage-nav {
     position: fixed;
     right: 10px;
-    bottom: 10px;
+    bottom: max(10px, env(safe-area-inset-bottom));
     left: 10px;
     z-index: 12;
     display: grid;
@@ -3750,6 +3761,12 @@ kbd {
     color: var(--paper);
     box-shadow: 0 18px 50px rgba(28, 29, 26, 0.25), inset 0 1px rgba(255, 255, 255, 0.08);
     backdrop-filter: blur(18px);
+    transition: transform 320ms var(--ease);
+  }
+
+  .mobile-stage-nav.is-hidden {
+    transform: translateY(calc(100% + 24px));
+    pointer-events: none;
   }
 
   .mobile-stage-nav a {
@@ -3779,11 +3796,12 @@ kbd {
 
   .page {
     width: 100%;
-    padding: 118px 24px 110px;
+    padding: 118px 24px calc(156px + env(safe-area-inset-bottom));
   }
 
   .page--home {
     padding-top: 120px;
+    padding-bottom: calc(126px + env(safe-area-inset-bottom));
   }
 
   .home-hero,
@@ -4002,11 +4020,20 @@ kbd {
   }
 
   .toast-region {
-    bottom: 84px;
+    bottom: calc(84px + env(safe-area-inset-bottom));
   }
 }
 
 @media (max-width: 620px) {
+  .mobile-stage-nav {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .mobile-stage-nav a {
+    min-width: 0;
+    padding-inline: 2px;
+  }
+
   .page {
     padding-inline: 16px;
   }
@@ -4287,6 +4314,10 @@ kbd {
 
   .chat-composer > div > span {
     margin-right: auto;
+  }
+
+  .page--coach {
+    padding-bottom: calc(188px + env(safe-area-inset-bottom));
   }
 
   .outcome-score {

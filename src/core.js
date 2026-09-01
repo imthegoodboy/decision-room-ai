@@ -8,7 +8,12 @@ export const MAX_PREMORTEM_ITEMS = 5;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number(value) || 0));
 const clean = (value, max = 240) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 const cleanLong = (value, max = 4000) => String(value ?? "").trim().slice(0, max);
-const dateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? String(value) : "";
+export const dateOnly = (value) => {
+  const candidate = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return "";
+  const parsed = new Date(`${candidate}T00:00:00Z`);
+  return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== candidate ? "" : candidate;
+};
 
 function addDays(date, days) {
   const next = new Date(date);
@@ -225,7 +230,7 @@ export function normalizeDecision(raw, now = new Date()) {
     confidence: clamp(raw.commitment.confidence ?? 3, 1, 5),
     rationale: cleanLong(raw.commitment.rationale, 1800),
     nextAction: clean(raw.commitment.nextAction, 500),
-    reviewDate: clean(raw.commitment.reviewDate, 20),
+    reviewDate: dateOnly(raw.commitment.reviewDate),
     decidedAt: clean(raw.commitment.decidedAt, 40) || now.toISOString(),
   } : null;
   const outcome = raw.outcome ? {
@@ -243,7 +248,7 @@ export function normalizeDecision(raw, now = new Date()) {
     mode: raw.mode === "quick" ? "quick" : "deep",
     template: Object.hasOwn(TEMPLATES, raw.template) ? raw.template : "blank",
     status: outcome ? "reviewed" : commitment ? "decided" : "draft",
-    deadline: clean(raw.deadline, 20),
+    deadline: dateOnly(raw.deadline),
     createdAt: clean(raw.createdAt, 40) || fallback.createdAt,
     updatedAt: clean(raw.updatedAt, 40) || fallback.updatedAt,
     options,
@@ -393,7 +398,21 @@ function expandCompactDraft(raw) {
   };
 }
 
+export function isDecisionDraftPayload(raw) {
+  if (!raw || typeof raw !== "object") return false;
+  const compact = Array.isArray(raw.o) && Array.isArray(raw.c);
+  const expanded = Array.isArray(raw.options) && Array.isArray(raw.criteria);
+  if (!compact && !expanded) return false;
+  const options = compact ? raw.o : raw.options;
+  const criteria = compact ? raw.c : raw.criteria;
+  if (options.length < 2 || criteria.length < 2) return false;
+  if (!options.every((item) => compact ? Array.isArray(item) && String(item?.[0] || "").trim() : String(item?.name || "").trim())) return false;
+  if (!criteria.every((item) => compact ? Array.isArray(item) && String(item?.[0] || "").trim() : String(item?.name || "").trim())) return false;
+  return true;
+}
+
 export function applyDecisionDraft(decision, raw, { source = "local", generatedAt = new Date().toISOString() } = {}) {
+  if (!isDecisionDraftPayload(raw)) throw new Error("Anna returned an incomplete first draft.");
   const expanded = expandCompactDraft(raw);
   const candidate = expanded && typeof expanded === "object" ? expanded : {};
   const fallback = buildFallbackDraft(decision, new Date(generatedAt));

@@ -99,8 +99,8 @@ test("AI-first draft covers framing, comparison, premortem, and commitment", asy
   await frame.getByRole("button", { name: /Build my first draft/ }).click();
 
   await expect(frame.getByRole("heading", { name: "A working analysis, not a blank worksheet." })).toBeVisible();
-  await expect(frame.locator('[data-option-field="name"]')).toHaveCount(2);
-  await expect(frame.locator('[data-criterion-field="name"]')).toHaveCount(5);
+  await expect(frame.locator('[data-option-field="name"]')).toHaveCount(3);
+  await expect(frame.locator('[data-criterion-field="name"]')).toHaveCount(4);
   await expect(frame.locator('[data-decision-field="deadline"]')).not.toHaveValue("");
   await expect(frame.locator(".draft-questions li")).toHaveCount(2);
 
@@ -181,6 +181,12 @@ test("narrow Anna window has no horizontal overflow and keeps Coach usable", asy
   await expect(frame.getByLabel("Message the Decision Coach")).toBeVisible();
   const dimensions = await frame.locator("html").evaluate((node) => ({ width: node.clientWidth, scroll: node.scrollWidth }));
   expect(dimensions.scroll).toBe(dimensions.width);
+  const appFrame = page.frames().find((candidate) => candidate.url().includes("/anna-apps/"));
+  expect(appFrame).toBeTruthy();
+  await appFrame.evaluate(() => window.scrollTo({ top: 320, behavior: "auto" }));
+  await expect(appFrame.locator(".mobile-stage-nav")).toHaveClass(/is-hidden/);
+  await appFrame.evaluate(() => window.scrollTo({ top: 0, behavior: "auto" }));
+  await expect(appFrame.locator(".mobile-stage-nav")).not.toHaveClass(/is-hidden/);
 });
 
 test("home and creation screens pass an automated accessibility scan", async ({ page }) => {

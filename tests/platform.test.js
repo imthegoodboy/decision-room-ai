@@ -126,3 +126,18 @@ test("Anna LLM completion retries one transient failure with a bounded timeout",
   assert.equal(calls.length, 2);
   assert.deepEqual(calls.map(({ options }) => options.timeoutMs), [100000, 100000]);
 });
+
+test("Anna LLM completion treats whitespace-only output as empty and retries", async () => {
+  let calls = 0;
+  const platform = new DecisionPlatform();
+  platform.anna = {
+    llm: {
+      async complete() {
+        calls += 1;
+        return calls === 1 ? { content: { text: "   \n" } } : { content: { text: "  Complete response.  " } };
+      },
+    },
+  };
+  assert.equal(await platform.complete({ messages: [] }), "Complete response.");
+  assert.equal(calls, 2);
+});
