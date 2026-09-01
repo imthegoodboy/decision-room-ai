@@ -16,7 +16,7 @@ Candidate to push and cut:
 app id: 218
 slug: decision-room-ai
 name: Decision Room AI
-candidate version: 1.1.2
+candidate version: 1.1.3
 previous submitted version: 1.1.1 (version id 606, bundle id 579)
 review status before resubmission: pending_review
 review candidate before resubmission: 1.1.1
@@ -70,7 +70,7 @@ The intended new identity is:
 ```text
 slug: decision-room-ai
 name: Decision Room AI
-version: 1.1.2
+version: 1.1.3
 architecture: UI + Anna LLM + Anna Storage; no Executa
 ```
 
@@ -84,7 +84,7 @@ git push origin main
 
 anna-app whoami --json
 anna-app apps push --account $ANNA_HOST --json
-anna-app apps cut 1.1.2 --account $ANNA_HOST --json
+anna-app apps cut 1.1.3 --account $ANNA_HOST --json
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
 anna-app apps versions decision-room-ai --account $ANNA_HOST --json
 anna-app apps submit-review decision-room-ai --account $ANNA_HOST --json
@@ -112,8 +112,9 @@ manifest SHA-256 `5ad483bb1c22d774b17e0226fbd1595a36ad9cf52ed39c37fbee76063635a1
 `apps sync-meta` uploaded six refreshed English screenshots and the logo. The
 candidate is pinned for review; it is not public until Anna approves it.
 
-Version 1.1.2 is the next candidate. It adds strict first-draft schema
-validation, empty-response retries, calendar-safe dates, consistent commitment
+Version 1.1.3 is the next candidate. It adds strict first-draft schema
+validation, complete-analysis validation that rejects truncated premortems,
+reasoning-safe 4,096-token retries, calendar-safe dates, consistent commitment
 cleanup when options are removed, responsive stage-header stacking, and a
 mobile stage bar that moves out of the way while users read or edit long views.
 
@@ -128,7 +129,7 @@ $ANNA_HOST = "https://anna.partners"
 cd C:\Users\parth\Desktop\anna-decision-room-ai
 
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
-anna-app apps release 1.1.2 --slug decision-room-ai --account $ANNA_HOST --json
+anna-app apps release 1.1.3 --slug decision-room-ai --account $ANNA_HOST --json
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
 anna-app apps versions decision-room-ai --account $ANNA_HOST --json
 ```

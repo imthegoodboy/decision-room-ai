@@ -20,6 +20,7 @@ import {
   normalizeDecision,
   normalizeStore,
   parseStructuredJson,
+  isAnalysisPayload,
   isDecisionDraftPayload,
   sensitivityAnalysis,
 } from "../src/core.js";
@@ -178,6 +179,13 @@ test("duplicate creates a fresh room without commitment, analysis, or chat", () 
 test("analysis JSON parser accepts fenced output and rejects prose", () => {
   assert.deepEqual(parseStructuredJson("```json\n{\"ok\":true}\n```"), { ok: true });
   assert.throws(() => parseStructuredJson("No structured result"), /unreadable/);
+});
+
+test("analysis validation rejects truncated premortems before persistence", () => {
+  const base = { headline: "A specific insight", summary: "Evidence-aware synthesis." };
+  assert.equal(isAnalysisPayload({ ...base, premortem: Array.from({ length: 4 }, () => ({ cause: "Cause", warning: "Signal", mitigation: "Action" })) }, "premortem"), false);
+  assert.equal(isAnalysisPayload({ ...base, premortem: Array.from({ length: 5 }, () => ({ cause: "Cause", warning: "Signal", mitigation: "Action" })) }, "premortem"), true);
+  assert.equal(isAnalysisPayload({ ...base, premortem: [{ cause: "Cause", warning: "", mitigation: "Action" }, ...Array.from({ length: 4 }, () => ({ cause: "Cause", warning: "Signal", mitigation: "Action" }))] }, "premortem"), false);
 });
 
 test("Coach responses stay readable when an Anna mock returns analysis JSON", () => {

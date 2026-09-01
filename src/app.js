@@ -22,6 +22,7 @@ import {
   normalizeAnalysis,
   normalizeStore,
   parseStructuredJson,
+  isAnalysisPayload,
   isDecisionDraftPayload,
   sensitivityAnalysis,
 } from "./core.js";
@@ -682,24 +683,25 @@ async function runAnalysis(decision, type) {
   );
   try {
     const prompt = buildAnalysisPrompt(decision, type);
-    let text = await state.platform.complete({
-      messages: [{ role: "user", content: { type: "text", text: prompt } }],
-      systemPrompt: "You are Decision Room's rigorous decision advisor. Stay grounded in the supplied decision data, distinguish evidence from assumptions, and prefer conditional advice and reversible experiments over certainty. Return valid JSON only.",
-      maxTokens: 3200,
+    const request = (text) => state.platform.complete({
+      messages: [{ role: "user", content: { type: "text", text } }],
+      systemPrompt: "/no_think\nYou are Decision Room's rigorous decision advisor. Stay grounded in the supplied decision data, distinguish evidence from assumptions, and prefer conditional advice and reversible experiments over certainty. Return one compact valid JSON object only. Keep the response under 1400 tokens and return exactly five complete premortem items when the mode asks for a premortem. Never return a partial object.",
+      maxTokens: 4096,
       temperature: 0.2,
     });
     let parsed;
-    try {
-      parsed = parseStructuredJson(text);
-    } catch {
-      text = await state.platform.complete({
-        messages: [{ role: "user", content: { type: "text", text: `Repair the following into exactly one valid JSON object without adding new claims. Return JSON only.\n\n${text}` } }],
-        systemPrompt: "Repair malformed JSON. Output JSON only.",
-        maxTokens: 2600,
-        temperature: 0,
-      });
-      parsed = parseStructuredJson(text);
+    let lastText = "";
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      lastText = await request(attempt === 0 ? prompt : `${prompt}\n\nPrevious response was incomplete or malformed. Rewrite the full object from the beginning. For PREMORTEM mode, include exactly five items, each with a non-empty cause, warning, and mitigation.`);
+      try {
+        parsed = parseStructuredJson(lastText);
+      } catch {
+        parsed = null;
+      }
+      if (isAnalysisPayload(parsed, type)) break;
+      parsed = null;
     }
+    if (!parsed) throw new Error("Anna returned an incomplete analysis.");
     const analysis = normalizeAnalysis({ ...parsed, id: createId("analysis"), type, source: "anna", createdAt: new Date().toISOString() });
     decision.analyses.push(analysis);
     if (type === "premortem" && analysis.premortem?.length) decision.premortem = analysis.premortem.map((item) => ({ ...item, id: createId("premortem") }));

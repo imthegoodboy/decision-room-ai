@@ -343,6 +343,7 @@ function buildFallbackDraft(decision, now = /* @__PURE__ */ new Date()) {
 function buildDecisionDraftPrompt(decision, now = /* @__PURE__ */ new Date()) {
   const fallback = buildFallbackDraft(decision, now);
   return [
+    "/no_think",
     "You are the first-pass decision architect inside Decision Room AI.",
     "Turn the user's initial decision question and context into a useful, editable analysis instead of a blank worksheet.",
     "Propose 2\u20133 realistic options (include a pilot, hybrid, delay, or negotiated path when plausible), exactly 4 criteria with integer weights that add to 100, initial 1\u20135 scores for every option/criterion, and one concise reason for every score.",
@@ -546,6 +547,15 @@ function normalizeAnalysis(raw) {
     premortem
   };
 }
+function isAnalysisPayload(raw, type = "advisor") {
+  if (!raw || typeof raw !== "object") return false;
+  const headline = clean(raw.headline, 220);
+  const summary = cleanLong(raw.summary, 1800);
+  if (!headline || !summary) return false;
+  if (type !== "premortem") return true;
+  if (!Array.isArray(raw.premortem) || raw.premortem.length !== MAX_PREMORTEM_ITEMS) return false;
+  return raw.premortem.every((item) => item && clean(item.cause, 500) && clean(item.warning, 500) && clean(item.mitigation, 600));
+}
 function buildFallbackAnalysis(decision, type = "advisor") {
   const scores = calculateScores(decision);
   const lens = confidenceLens(decision);
@@ -656,7 +666,8 @@ function buildAnalysisPrompt(decision, type) {
       if (note) evidenceLines.push(`- ${option.name} / ${criterion.name}: ${note}`);
     }
   }
-  return `ANALYSIS MODE: ${analysisLabels[type] || analysisLabels.advisor}
+  return `/no_think
+ANALYSIS MODE: ${analysisLabels[type] || analysisLabels.advisor}
 
 DECISION
 ${decision.title}
@@ -696,7 +707,8 @@ For PREMORTEM mode, return exactly five premortem items. Use only the user's sup
 function buildCoachPrompt(decision, question) {
   const scores = calculateScores(decision);
   const recentCoach = decision.coach.slice(-8).map((message) => `${message.role === "assistant" ? "COACH" : "USER"}: ${message.text}`).join("\n");
-  return `ACTIVE DECISION
+  return `/no_think
+ACTIVE DECISION
 ${decision.title}
 
 CONTEXT
@@ -1576,26 +1588,27 @@ async function runAnalysis(decision, type) {
   );
   try {
     const prompt = buildAnalysisPrompt(decision, type);
-    let text = await state.platform.complete({
-      messages: [{ role: "user", content: { type: "text", text: prompt } }],
-      systemPrompt: "You are Decision Room's rigorous decision advisor. Stay grounded in the supplied decision data, distinguish evidence from assumptions, and prefer conditional advice and reversible experiments over certainty. Return valid JSON only.",
-      maxTokens: 3200,
+    const request = (text) => state.platform.complete({
+      messages: [{ role: "user", content: { type: "text", text } }],
+      systemPrompt: "/no_think\nYou are Decision Room's rigorous decision advisor. Stay grounded in the supplied decision data, distinguish evidence from assumptions, and prefer conditional advice and reversible experiments over certainty. Return one compact valid JSON object only. Keep the response under 1400 tokens and return exactly five complete premortem items when the mode asks for a premortem. Never return a partial object.",
+      maxTokens: 4096,
       temperature: 0.2
     });
     let parsed;
-    try {
-      parsed = parseStructuredJson(text);
-    } catch {
-      text = await state.platform.complete({
-        messages: [{ role: "user", content: { type: "text", text: `Repair the following into exactly one valid JSON object without adding new claims. Return JSON only.
+    let lastText = "";
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      lastText = await request(attempt === 0 ? prompt : `${prompt}
 
-${text}` } }],
-        systemPrompt: "Repair malformed JSON. Output JSON only.",
-        maxTokens: 2600,
-        temperature: 0
-      });
-      parsed = parseStructuredJson(text);
+Previous response was incomplete or malformed. Rewrite the full object from the beginning. For PREMORTEM mode, include exactly five items, each with a non-empty cause, warning, and mitigation.`);
+      try {
+        parsed = parseStructuredJson(lastText);
+      } catch {
+        parsed = null;
+      }
+      if (isAnalysisPayload(parsed, type)) break;
+      parsed = null;
     }
+    if (!parsed) throw new Error("Anna returned an incomplete analysis.");
     const analysis = normalizeAnalysis({ ...parsed, id: createId("analysis"), type, source: "anna", createdAt: (/* @__PURE__ */ new Date()).toISOString() });
     decision.analyses.push(analysis);
     if (type === "premortem" && analysis.premortem?.length) decision.premortem = analysis.premortem.map((item) => ({ ...item, id: createId("premortem") }));

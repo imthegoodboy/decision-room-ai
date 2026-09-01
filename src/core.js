@@ -362,6 +362,7 @@ export function buildFallbackDraft(decision, now = new Date()) {
 export function buildDecisionDraftPrompt(decision, now = new Date()) {
   const fallback = buildFallbackDraft(decision, now);
   return [
+    "/no_think",
     "You are the first-pass decision architect inside Decision Room AI.",
     "Turn the user's initial decision question and context into a useful, editable analysis instead of a blank worksheet.",
     "Propose 2–3 realistic options (include a pilot, hybrid, delay, or negotiated path when plausible), exactly 4 criteria with integer weights that add to 100, initial 1–5 scores for every option/criterion, and one concise reason for every score.",
@@ -580,6 +581,22 @@ export function normalizeAnalysis(raw) {
   };
 }
 
+/**
+ * Guard the boundary between an Anna response and persisted app state.
+ * A syntactically valid JSON fragment is not necessarily a usable analysis;
+ * in particular, a truncated premortem must never replace the complete local
+ * fallback with zero or partial failure modes.
+ */
+export function isAnalysisPayload(raw, type = "advisor") {
+  if (!raw || typeof raw !== "object") return false;
+  const headline = clean(raw.headline, 220);
+  const summary = cleanLong(raw.summary, 1800);
+  if (!headline || !summary) return false;
+  if (type !== "premortem") return true;
+  if (!Array.isArray(raw.premortem) || raw.premortem.length !== MAX_PREMORTEM_ITEMS) return false;
+  return raw.premortem.every((item) => item && clean(item.cause, 500) && clean(item.warning, 500) && clean(item.mitigation, 600));
+}
+
 export function buildFallbackAnalysis(decision, type = "advisor") {
   const scores = calculateScores(decision);
   const lens = confidenceLens(decision);
@@ -687,13 +704,13 @@ export function buildAnalysisPrompt(decision, type) {
       if (note) evidenceLines.push(`- ${option.name} / ${criterion.name}: ${note}`);
     }
   }
-  return `ANALYSIS MODE: ${analysisLabels[type] || analysisLabels.advisor}\n\nDECISION\n${decision.title}\n\nCONTEXT\n${decision.context || "No additional context provided."}\n\nOPTIONS AND CURRENT SCORES\n${scores.map((item) => `- ${item.name}: ${item.score}/100; evidence coverage ${item.evidenceCoverage}%`).join("\n")}\n\nCRITERIA\n${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}\n\nEVIDENCE NOTES\n${evidenceLines.join("\n") || "No evidence notes recorded yet."}\n\nASSUMPTIONS\n${decision.assumptions.map((item) => `- ${item.text} (confidence ${item.confidence}/5)`).join("\n") || "None recorded."}\n\nRISKS\n${decision.risks.map((item) => `- ${item.text} (likelihood ${item.likelihood}/5, impact ${item.impact}/5)`).join("\n") || "None recorded."}\n\nReturn exactly one JSON object with this shape:\n{\n  "headline": "specific insight, not a generic title",\n  "summary": "concise evidence-aware synthesis",\n  "blindSpots": ["missing fact, bias, or assumption"],\n  "questions": ["high-value question to answer next"],\n  "scenarios": ["scenario and what would make it more likely"],\n  "experiments": ["small reversible action that reduces uncertainty"],\n  "recommendation": "conditional recommendation that names the evidence behind it",\n  "caveat": "what the available information cannot establish",\n  "premortem": [{"cause":"failure cause","warning":"early warning signal","mitigation":"preventive action"}]\n}\nFor PREMORTEM mode, return exactly five premortem items. Use only the user's supplied decision data. Treat scores as subjective inputs, not facts. Never claim external research or certainty. Return JSON only.`;
+  return `/no_think\nANALYSIS MODE: ${analysisLabels[type] || analysisLabels.advisor}\n\nDECISION\n${decision.title}\n\nCONTEXT\n${decision.context || "No additional context provided."}\n\nOPTIONS AND CURRENT SCORES\n${scores.map((item) => `- ${item.name}: ${item.score}/100; evidence coverage ${item.evidenceCoverage}%`).join("\n")}\n\nCRITERIA\n${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}\n\nEVIDENCE NOTES\n${evidenceLines.join("\n") || "No evidence notes recorded yet."}\n\nASSUMPTIONS\n${decision.assumptions.map((item) => `- ${item.text} (confidence ${item.confidence}/5)`).join("\n") || "None recorded."}\n\nRISKS\n${decision.risks.map((item) => `- ${item.text} (likelihood ${item.likelihood}/5, impact ${item.impact}/5)`).join("\n") || "None recorded."}\n\nReturn exactly one JSON object with this shape:\n{\n  "headline": "specific insight, not a generic title",\n  "summary": "concise evidence-aware synthesis",\n  "blindSpots": ["missing fact, bias, or assumption"],\n  "questions": ["high-value question to answer next"],\n  "scenarios": ["scenario and what would make it more likely"],\n  "experiments": ["small reversible action that reduces uncertainty"],\n  "recommendation": "conditional recommendation that names the evidence behind it",\n  "caveat": "what the available information cannot establish",\n  "premortem": [{"cause":"failure cause","warning":"early warning signal","mitigation":"preventive action"}]\n}\nFor PREMORTEM mode, return exactly five premortem items. Use only the user's supplied decision data. Treat scores as subjective inputs, not facts. Never claim external research or certainty. Return JSON only.`;
 }
 
 export function buildCoachPrompt(decision, question) {
   const scores = calculateScores(decision);
   const recentCoach = decision.coach.slice(-8).map((message) => `${message.role === "assistant" ? "COACH" : "USER"}: ${message.text}`).join("\n");
-  return `ACTIVE DECISION\n${decision.title}\n\nCONTEXT\n${decision.context || "No additional context provided."}\n\nOPTIONS AND SCORES\n${scores.map((item) => `- ${item.name}: ${item.score}/100, ${item.evidenceCoverage}% evidence coverage`).join("\n")}\n\nCRITERIA\n${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}\n\nASSUMPTIONS\n${decision.assumptions.map((item) => `- ${item.text} (${item.confidence}/5 confidence)`).join("\n") || "None recorded."}\n\nRISKS\n${decision.risks.map((item) => `- ${item.text} (${item.likelihood}×${item.impact})`).join("\n") || "None recorded."}\n\nRECENT CONVERSATION\n${recentCoach || "This is the first message."}\n\nUSER QUESTION\n${cleanLong(question, 1200)}\n\nAnswer as a concise decision coach. Ground every specific observation in the supplied decision. Distinguish the user's evidence from your inference. Ask at most one sharp follow-up question. Do not claim external research, do not make the decision for the user, and do not output JSON.`;
+  return `/no_think\nACTIVE DECISION\n${decision.title}\n\nCONTEXT\n${decision.context || "No additional context provided."}\n\nOPTIONS AND SCORES\n${scores.map((item) => `- ${item.name}: ${item.score}/100, ${item.evidenceCoverage}% evidence coverage`).join("\n")}\n\nCRITERIA\n${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}\n\nASSUMPTIONS\n${decision.assumptions.map((item) => `- ${item.text} (${item.confidence}/5 confidence)`).join("\n") || "None recorded."}\n\nRISKS\n${decision.risks.map((item) => `- ${item.text} (${item.likelihood}×${item.impact})`).join("\n") || "None recorded."}\n\nRECENT CONVERSATION\n${recentCoach || "This is the first message."}\n\nUSER QUESTION\n${cleanLong(question, 1200)}\n\nAnswer as a concise decision coach. Ground every specific observation in the supplied decision. Distinguish the user's evidence from your inference. Ask at most one sharp follow-up question. Do not claim external research, do not make the decision for the user, and do not output JSON.`;
 }
 
 export function decisionProgress(decision) {
