@@ -114,7 +114,8 @@ test("AI-first draft covers framing, comparison, premortem, and commitment", asy
   await frame.getByRole("link", { name: /Compare options/ }).click();
   await expect(frame.getByRole("heading", { name: /leads the first-pass comparison/i })).toBeVisible();
   await expect(frame.locator(".compare-ai__signals > div")).toHaveCount(4);
-  await expect(frame.locator("[data-evidence]").first()).toHaveValue(/Draft hypothesis/i);
+  const firstEvidenceReason = await frame.locator("[data-evidence]").first().inputValue();
+  expect(firstEvidenceReason).not.toMatch(/verify how/i);
   await expect(frame.locator(".evidence-source--ai").first()).toHaveText("Anna inference");
 
   await frame.getByRole("link", { name: /Challenge/ }).last().click();

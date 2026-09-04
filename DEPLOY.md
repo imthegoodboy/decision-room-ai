@@ -16,7 +16,7 @@ Candidate to push and cut:
 app id: 218
 slug: decision-room-ai
 name: Decision Room AI
-candidate version: 1.1.5
+candidate version: 1.1.6
 previous submitted version: 1.1.1 (version id 606, bundle id 579)
 review status before resubmission: pending_review
 review candidate before resubmission: 1.1.1
@@ -70,7 +70,7 @@ The intended new identity is:
 ```text
 slug: decision-room-ai
 name: Decision Room AI
-version: 1.1.5
+version: 1.1.6
 architecture: UI + Anna LLM + Anna Storage; no Executa
 ```
 
@@ -84,7 +84,7 @@ git push origin main
 
 anna-app whoami --json
 anna-app apps push --account $ANNA_HOST --json
-anna-app apps cut 1.1.5 --account $ANNA_HOST --json
+anna-app apps cut 1.1.6 --account $ANNA_HOST --json
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
 anna-app apps versions decision-room-ai --account $ANNA_HOST --json
 anna-app apps submit-review decision-room-ai --account $ANNA_HOST --json
@@ -112,13 +112,16 @@ manifest SHA-256 `5ad483bb1c22d774b17e0226fbd1595a36ad9cf52ed39c37fbee76063635a1
 `apps sync-meta` uploaded six refreshed English screenshots and the logo. The
 candidate is pinned for review; it is not public until Anna approves it.
 
-Version 1.1.5 is the next candidate. It fixes Challenge-card clipping and Frame
+Version 1.1.6 is the next candidate. It fixes Challenge-card clipping and Frame
 control overlap across Anna window sizes, safely renders Coach Markdown,
 separates user-confirmed facts from Anna inference, and replaces the ambiguous
 readiness label with a transparent decision-preparation score. It also retries
 generation and rejects generic, incomplete, or incorrectly grounded drafts
 before they can enter the user's decision room, while bounding background
-refinement so the interface cannot remain indefinitely busy.
+refinement so the interface cannot remain indefinitely busy. If the model route
+still cannot return a strong draft, a scenario-aware starter preserves specific
+career, commute, scope, reward, and negotiated-trial reasoning instead of a
+generic template.
 
 `anna-app apps grants decision-room-ai --account $ANNA_HOST --json` confirms the
 installed version, enabled state, complete LLM/storage/agent-session grants,
@@ -131,7 +134,7 @@ $ANNA_HOST = "https://anna.partners"
 cd C:\Users\parth\Desktop\anna-decision-room-ai
 
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
-anna-app apps release 1.1.5 --slug decision-room-ai --account $ANNA_HOST --json
+anna-app apps release 1.1.6 --slug decision-room-ai --account $ANNA_HOST --json
 anna-app apps status decision-room-ai --account $ANNA_HOST --json
 anna-app apps versions decision-room-ai --account $ANNA_HOST --json
 ```

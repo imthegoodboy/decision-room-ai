@@ -299,9 +299,14 @@ export function normalizeStore(raw) {
 }
 
 function inferredOptions(decision) {
-  const title = clean(decision.title, 140).replace(/^\s*(should|shall|do)\s+(i|we)\s+/i, "").replace(/[?!.]+$/, "");
+  const source = cleanLong(decision.title, 500);
+  const title = clean(source.split(/[?!]/)[0], 140).replace(/^\s*(should|shall|do)\s+(i|we)\s+/i, "").replace(/[?!.]+$/, "");
   const split = title.split(/\s+(?:or|versus|vs\.?|\/),?\s+/i).map((item) => clean(item, 100)).filter(Boolean);
-  if (split.length >= 2) return split.slice(0, 3).map((item) => item.replace(/^whether\s+/i, ""));
+  if (split.length >= 2) {
+    const options = split.slice(0, 3).map((item) => item.replace(/^whether\s+/i, "").replace(/[,;:]$/, ""));
+    if (options.length === 2 && /role|career|job|offer|team|commut/i.test(source)) options.push("Negotiate a time-boxed hybrid trial");
+    return options;
+  }
   const byTemplate = {
     career: ["Accept the new opportunity", "Stay on the current path", "Negotiate a reversible trial"],
     purchase: ["Buy the leading option", "Choose the alternative", "Delay and test the need"],
@@ -313,10 +318,20 @@ function inferredOptions(decision) {
 }
 
 function inferredCriteria(decision) {
+  const source = `${decision.title || ""} ${decision.context || ""}`;
+  if (/role|career|job|offer|team|commut|remote|salary|compensation/i.test(source)) {
+    return [
+      { name: "Career growth", weight: 35, description: "Scope, learning, and future opportunity." },
+      { name: "Commute and life fit", weight: 30, description: "Effect on energy, family time, and routine." },
+      { name: "Role scope and support", weight: 20, description: "Real authority, resources, and expectations." },
+      { name: "Total reward", weight: 15, description: "Compensation, benefits, time, and travel cost." },
+    ];
+  }
   const template = TEMPLATES[decision.template] || TEMPLATES.blank;
-  return template.criteria.map(([name, weight], index) => ({
+  const weights = [30, 25, 25, 20];
+  return template.criteria.slice(0, 4).map(([name], index) => ({
     name,
-    weight,
+    weight: weights[index],
     description: [
       "The outcome this decision is meant to improve.",
       "How well the option fits the real situation.",
@@ -325,6 +340,37 @@ function inferredCriteria(decision) {
       "How well the choice fits your stated priorities.",
     ][index] || "A factor that should be compared consistently.",
   }));
+}
+
+function fallbackScoreAndReason(decision, option, optionIndex, criterion, criterionIndex) {
+  const source = `${decision.title || ""} ${decision.context || ""}`;
+  const career = /role|career|job|offer|team|commut|remote|salary|compensation/i.test(source);
+  if (career) {
+    const scores = [[5, 2, 4, 4], [2, 5, 3, 3], [4, 4, 4, 3]];
+    const reasons = [
+      [
+        "Expanded ownership may accelerate learning; confirm the actual decision authority.",
+        "The stated commute may erode evenings; test peak-hour travel and recovery.",
+        "The lead role suggests broader scope; verify its team, budget, and expectations.",
+        "The new role may improve reward; confirm salary, benefits, and travel cost.",
+      ],
+      [
+        "Staying preserves continuity but may provide less new responsibility.",
+        "The current path avoids the new commute and protects existing routines.",
+        "The current role is known; confirm whether meaningful stretch work is available.",
+        "Known compensation lowers uncertainty; compare it with the complete offer.",
+      ],
+      [
+        "A hybrid trial can test growth while preserving an exit path.",
+        "Remote days could reduce commute load; get the schedule in writing.",
+        "A trial can expose real authority, workload, and support before commitment.",
+        "Negotiation may preserve upside; confirm which terms are guaranteed.",
+      ],
+    ];
+    return { rating: scores[optionIndex]?.[criterionIndex] ?? 3, reason: `Anna inference: ${reasons[optionIndex]?.[criterionIndex] || "This trade-off needs an observable test before commitment."}` };
+  }
+  const rating = Math.min(5, Math.max(1, 3 + (optionIndex === 0 ? (criterionIndex === 0 ? 1 : 0) : optionIndex === 1 ? (criterionIndex === 2 ? 1 : 0) : (criterionIndex === 3 ? 1 : 0))));
+  return { rating, reason: `Anna inference: ${option.name} is provisionally ${rating}/5 on ${criterion.name}; define one observable result before relying on it.` };
 }
 
 function draftPremortem(options, criteria) {
@@ -342,9 +388,12 @@ function draftPremortem(options, criteria) {
 export function buildFallbackDraft(decision, now = new Date()) {
   const optionNames = inferredOptions(decision);
   const criteria = inferredCriteria(decision);
+  const career = /role|career|job|offer|team|commut|remote|salary|compensation/i.test(`${decision.title || ""} ${decision.context || ""}`);
   const options = optionNames.map((name, optionIndex) => ({
     name,
-    notes: optionIndex === 0 ? "AI-suggested starting point — verify the upside and constraints before relying on it." : "AI-suggested alternative — add the strongest evidence for and against this path.",
+    notes: career
+      ? ["Highest growth upside; the commute cost remains untested.", "Preserves the known team and routine; the growth path needs proof.", "Tests the role and commute before an irreversible move."][optionIndex] || "A negotiated path that keeps the decision reversible."
+      : optionIndex === 0 ? "Direct path from the question; test its largest upside and constraint." : "Alternative path; identify one observable advantage and one trade-off.",
   }));
   const ratings = {};
   const evidence = {};
@@ -352,26 +401,31 @@ export function buildFallbackDraft(decision, now = new Date()) {
     ratings[option.name] = {};
     evidence[option.name] = {};
     criteria.forEach((criterion, criterionIndex) => {
-      const rating = Math.min(5, Math.max(1, 3 + (optionIndex === 0 ? (criterionIndex === 0 ? 1 : 0) : optionIndex === 1 ? (criterionIndex === 2 ? 1 : 0) : (criterionIndex === 3 ? 1 : 0))));
+      const { rating, reason } = fallbackScoreAndReason(decision, option, optionIndex, criterion, criterionIndex);
       ratings[option.name][criterion.name] = rating;
-      evidence[option.name][criterion.name] = `Draft hypothesis (${rating}/5): ${option.name} may be a ${rating >= 4 ? "strong" : rating <= 2 ? "weak" : "mixed"} fit for ${criterion.name}. Replace this with an observable fact.`;
+      evidence[option.name][criterion.name] = reason;
     });
   });
+  const assumptions = career ? [
+    { text: "The new role provides meaningful ownership, not only a new title.", confidence: 3, evidence: "Ask for written scope, authority, team, and success measures." },
+    { text: "The commute is sustainable during normal peak-hour weeks.", confidence: 2, evidence: "Run the real route for five workdays and track energy." },
+    { text: "A hybrid arrangement is genuinely available and durable.", confidence: 2, evidence: "Get the weekly remote schedule and review terms in writing." },
+  ] : [
+    { text: "The facts in the initial prompt are current and complete.", confidence: 3, evidence: "Confirm the most decision-critical fact before committing." },
+    { text: "The leading option can deliver its main benefit without breaking a non-negotiable constraint.", confidence: 3, evidence: "Name the constraint and the evidence that would test it." },
+    { text: "The criteria reflect what matters most over the decision horizon.", confidence: 3, evidence: "Ask which criterion you would defend if the option names were hidden." },
+  ];
   return {
     deadline: dateOnly(decision.deadline) || addDays(now, 30),
     options,
     criteria,
     ratings,
     evidence,
-    assumptions: [
-      { text: "The facts in the initial prompt are current and complete.", confidence: 3, evidence: "Confirm the most decision-critical fact before committing." },
-      { text: "The leading option can deliver its main benefit without breaking a non-negotiable constraint.", confidence: 3, evidence: "Name the constraint and the evidence that would test it." },
-      { text: "The criteria reflect what matters most over the decision horizon.", confidence: 3, evidence: "Ask which criterion you would defend if the option names were hidden." },
-    ],
+    assumptions,
     risks: options.slice(0, 3).map((option, index) => ({ option: option.name, text: `${option.name} underdelivers on the highest-stakes constraint.`, likelihood: index === 0 ? 3 : 2, impact: 4, mitigation: "Run a small test and define a clear exit condition before scaling the choice." })),
     premortem: draftPremortem(options, criteria),
     clarifyingQuestions: decision.context ? ["Which fact in this context is least certain?", "What would make you change the current leading path?"] : ["What constraint is truly non-negotiable?", "What evidence would make you change the leading path?"],
-    reasoning: "I turned the initial prompt into an editable first pass. The scores and notes are hypotheses, not facts; review the assumptions and replace each draft rationale with evidence from your situation.",
+    reasoning: career ? "This starter draft makes the growth-versus-commute trade-off explicit and adds a reversible negotiated path. Every score reason is an inference until you confirm it." : "This starter draft turns the prompt into comparable paths without treating inference as fact. Replace each provisional reason with an observable result.",
     commitSuggestion: { option: options[0]?.name, confidence: 3, rationale: `The first-pass comparison currently favors ${options[0]?.name || "the leading option"}, but the ranking is provisional until the highest-weighted criterion has direct evidence.`, nextAction: `Run one small test of ${criteria[0]?.name || "the top criterion"} before committing.` },
   };
 }
@@ -481,7 +535,7 @@ export function applyDecisionDraft(decision, raw, { source = "local", generatedA
     const item = scoreItems.find((entry) => lookup(options, entry?.option, optionIndex)?.name === option.name && lookup(criteria, entry?.criterion, criterionIndex)?.name === criterion.name);
     const fallbackRating = fallback.ratings[fallback.options[optionIndex]?.name]?.[fallback.criteria[criterionIndex]?.name] || 3;
     ratings[option.id][criterion.id] = clamp(item?.rating ?? fallbackRating, 1, 5);
-    evidence[option.id][criterion.id] = cleanLong(item?.reasoning, 800) || `Draft hypothesis (${ratings[option.id][criterion.id]}/5): verify how ${option.name} fits ${criterion.name}.`;
+    evidence[option.id][criterion.id] = cleanLong(item?.reasoning, 800) || `Anna inference: ${option.name} is provisionally ${ratings[option.id][criterion.id]}/5 on ${criterion.name}; confirm it with an observable result.`;
   }));
   const assumptions = (Array.isArray(candidate.assumptions) ? candidate.assumptions : fallback.assumptions).slice(0, 16).map((item) => ({ id: createId("assumption"), text: clean(item?.text, 500), confidence: clamp(item?.confidence ?? 3, 1, 5), evidence: clean(item?.evidence, 600) })).filter((item) => item.text);
   const risks = (Array.isArray(candidate.risks) ? candidate.risks : fallback.risks).slice(0, 16).map((item, index) => ({ id: createId("risk"), optionId: lookup(options, item?.option, index)?.id || options[0].id, text: clean(item?.text, 500), likelihood: clamp(item?.likelihood ?? 3, 1, 5), impact: clamp(item?.impact ?? 3, 1, 5), mitigation: clean(item?.mitigation, 600) })).filter((item) => item.text);

@@ -42,14 +42,19 @@ test("AI first draft fills the room instead of leaving a blank worksheet", () =>
   const draft = buildFallbackDraft(decision, now);
   applyDecisionDraft(decision, draft, { source: "local", generatedAt: now.toISOString() });
   assert.ok(decision.options.length >= 2);
-  assert.equal(decision.criteria.length, 5);
+  assert.equal(decision.criteria.length, 4);
   assert.equal(decision.deadline, "2026-09-27");
   assert.equal(decision.premortem.length, 5);
   assert.ok(decision.assumptions.length >= 3);
   assert.ok(decision.risks.length >= 2);
   assert.ok(decision.draftMeta.clarifyingQuestions.length >= 2);
   assert.ok(decision.commitSuggestion.rationale.length > 20);
-  assert.match(decision.evidence[decision.options[0].id][decision.criteria[0].id], /Draft hypothesis/i);
+  assert.match(decision.evidence[decision.options[0].id][decision.criteria[0].id], /Anna inference/i);
+
+  assert.equal(decision.options.length, 3);
+  assert.match(decision.options[2].name, /hybrid trial/i);
+  assert.deepEqual(decision.criteria.map((criterion) => criterion.name), ["Career growth", "Commute and life fit", "Role scope and support", "Total reward"]);
+  assert.doesNotMatch(JSON.stringify(decision.evidence), /verify how/i);
   assert.equal(decision.evidenceSources[decision.options[0].id][decision.criteria[0].id], "ai");
 });
 
