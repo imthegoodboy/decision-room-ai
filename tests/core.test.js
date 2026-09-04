@@ -14,6 +14,7 @@ import {
   compareInsight,
   confidenceLens,
   createDecision,
+  decisionDraftQualityIssues,
   decisionProgress,
   duplicateDecision,
   formatCoachResponse,
@@ -24,6 +25,7 @@ import {
   isDecisionDraftPayload,
   sensitivityAnalysis,
 } from "../src/core.js";
+import { renderSafeMarkdown } from "../src/markdown.js";
 
 test("career template creates a complete editable decision frame", () => {
   const decision = createDecision({ title: "Should I accept the offer?", template: "career", mode: "deep" }, new Date("2026-08-24T10:00:00Z"));
@@ -48,6 +50,7 @@ test("AI first draft fills the room instead of leaving a blank worksheet", () =>
   assert.ok(decision.draftMeta.clarifyingQuestions.length >= 2);
   assert.ok(decision.commitSuggestion.rationale.length > 20);
   assert.match(decision.evidence[decision.options[0].id][decision.criteria[0].id], /Draft hypothesis/i);
+  assert.equal(decision.evidenceSources[decision.options[0].id][decision.criteria[0].id], "ai");
 });
 
 test("AI draft and comparison prompts make the proactive role explicit", () => {
@@ -125,15 +128,70 @@ test("weighted scores are normalized to a transparent 0-100 scale", () => {
   assert.equal(scores[1].score, 20);
 });
 
-test("evidence coverage and readiness react to recorded support", () => {
+test("only user-confirmed notes raise evidence coverage and preparation", () => {
   const decision = createDecision({ title: "Choose a path" });
   const before = confidenceLens(decision);
   for (const option of decision.options) {
-    for (const criterion of decision.criteria) decision.evidence[option.id][criterion.id] = "Observed evidence from a real trial.";
+    for (const criterion of decision.criteria) {
+      decision.evidence[option.id][criterion.id] = "Anna inference about the option.";
+      decision.evidenceSources[option.id][criterion.id] = "ai";
+    }
+  }
+  assert.equal(confidenceLens(decision).evidenceCoverage, 0);
+  for (const option of decision.options) {
+    for (const criterion of decision.criteria) {
+      decision.evidence[option.id][criterion.id] = "Observed evidence from a real trial.";
+      decision.evidenceSources[option.id][criterion.id] = "user";
+    }
   }
   const after = confidenceLens(decision);
   assert.equal(after.evidenceCoverage, 100);
   assert.ok(after.readiness > before.readiness);
+});
+
+test("legacy draft notes migrate conservatively as AI inference", () => {
+  const original = createDecision({ title: "Choose a path" });
+  const option = original.options[0];
+  const criterion = original.criteria[0];
+  original.evidence[option.id][criterion.id] = "Strongest draw for talent and morale.";
+  original.draftMeta = { source: "anna", status: "ready" };
+  delete original.evidenceSources;
+  const restored = normalizeDecision(original);
+  assert.equal(restored.evidenceSources[option.id][criterion.id], "ai");
+  assert.equal(calculateScores(restored).find((item) => item.optionId === option.id).evidenceCoverage, 0);
+});
+
+test("draft quality gate rejects generic model output", () => {
+  const generic = {
+    o: [["Option A", "Generic"], ["Option B", "Generic"]],
+    c: [["C1", 25, ""], ["C2", 25, ""], ["C3", 25, ""], ["C4", 25, ""]],
+    s: Array.from({ length: 8 }, (_, index) => [Math.floor(index / 4), index % 4, 3, "Verify how Option A fits Criterion A."]),
+    a: [["A", 3, "Test"], ["B", 3, "Test"], ["C", 3, "Test"]],
+    r: [[0, "Risk A", 3, 3, "Mitigate"], [1, "Risk B", 3, 3, "Mitigate"]],
+    p: Array.from({ length: 5 }, () => ["Failure", "Signal", "Mitigation"]),
+  };
+  assert.ok(decisionDraftQualityIssues(generic).length > 0);
+});
+
+test("draft quality gate rejects a detailed response grounded in the wrong decision", () => {
+  const wrongDraft = {
+    o: [["Accept the offer", "More responsibility"], ["Stay remote", "Keep flexibility"]],
+    c: [["Growth", 25, "Career"], ["Commute", 25, "Travel"], ["Team", 25, "People"], ["Pay", 25, "Reward"]],
+    s: Array.from({ length: 8 }, (_, index) => [Math.floor(index / 4), index % 4, 3, "The written role details support this rating."]),
+    a: [["Offer is current", 3, "Confirm"], ["Role is accurate", 3, "Review"], ["Team is stable", 3, "Ask"]],
+    r: [[0, "Commute fatigue", 3, 3, "Test travel"], [1, "Growth stalls", 3, 3, "Set milestone"]],
+    p: Array.from({ length: 5 }, () => ["Role disappoints", "Scope stays vague", "Get it in writing"]),
+  };
+  const decision = createDecision({ title: "Should we move to a four-day week or run a three-month pilot?" });
+  assert.match(decisionDraftQualityIssues(wrongDraft, decision).join(" "), /specific terms/i);
+});
+
+test("Coach Markdown renders emphasis and lists while escaping HTML", () => {
+  const rendered = renderSafeMarkdown("**Output Parity**\n\n- Check one\n- Check two\n\n<script>alert(1)</script>");
+  assert.match(rendered, /<strong>Output Parity<\/strong>/);
+  assert.match(rendered, /<ul><li>Check one<\/li><li>Check two<\/li><\/ul>/);
+  assert.doesNotMatch(rendered, /<script>/);
+  assert.match(rendered, /&lt;script&gt;/);
 });
 
 test("sensitivity analysis detects a leader that changes with criterion weight", () => {
@@ -204,7 +262,7 @@ test("local AI fallbacks stay grounded, useful, and transparent", () => {
   const decision = createDecision({ title: "Choose a path", template: "career" });
   const analysis = buildFallbackAnalysis(decision, "challenger");
   assert.equal(analysis.source, "local");
-  assert.match(analysis.summary, /evidence coverage/i);
+  assert.match(analysis.summary, /user-confirmed support/i);
   assert.ok(analysis.blindSpots.length > 0);
   assert.ok(analysis.experiments.length > 0);
   const premortem = buildFallbackAnalysis(decision, "premortem");

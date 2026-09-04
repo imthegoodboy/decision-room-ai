@@ -125,6 +125,10 @@ export function createDecision(input = {}, now = new Date()) {
     option.id,
     Object.fromEntries(criteria.map((criterion) => [criterion.id, ""])),
   ]));
+  const evidenceSources = Object.fromEntries(options.map((option) => [
+    option.id,
+    Object.fromEntries(criteria.map((criterion) => [criterion.id, "none"])),
+  ]));
   const timestamp = now.toISOString();
   return {
     id,
@@ -140,6 +144,7 @@ export function createDecision(input = {}, now = new Date()) {
     criteria,
     ratings,
     evidence,
+    evidenceSources,
     assumptions: [],
     risks: [],
     analyses: [],
@@ -172,12 +177,23 @@ export function normalizeDecision(raw, now = new Date()) {
 
   const ratings = {};
   const evidence = {};
+  const evidenceSources = {};
   for (const option of options) {
     ratings[option.id] = {};
     evidence[option.id] = {};
+    evidenceSources[option.id] = {};
     for (const criterion of criteria) {
       ratings[option.id][criterion.id] = clamp(raw.ratings?.[option.id]?.[criterion.id] ?? 3, 1, 5);
-      evidence[option.id][criterion.id] = cleanLong(raw.evidence?.[option.id]?.[criterion.id], 800);
+      const note = cleanLong(raw.evidence?.[option.id]?.[criterion.id], 800);
+      const storedSource = raw.evidenceSources?.[option.id]?.[criterion.id];
+      evidence[option.id][criterion.id] = note;
+      evidenceSources[option.id][criterion.id] = !note
+        ? "none"
+        : ["user", "ai", "unknown"].includes(storedSource)
+          ? storedSource
+          : raw.draftMeta
+            ? "ai"
+            : "unknown";
     }
   }
 
@@ -255,6 +271,7 @@ export function normalizeDecision(raw, now = new Date()) {
     criteria,
     ratings,
     evidence,
+    evidenceSources,
     assumptions,
     risks,
     analyses,
@@ -412,6 +429,34 @@ export function isDecisionDraftPayload(raw) {
   return true;
 }
 
+export function decisionDraftQualityIssues(raw, decision = null) {
+  if (!isDecisionDraftPayload(raw)) return ["incomplete structure"];
+  const draft = expandCompactDraft(raw);
+  const options = Array.isArray(draft.options) ? draft.options : [];
+  const criteria = Array.isArray(draft.criteria) ? draft.criteria : [];
+  const scores = Array.isArray(draft.scores) ? draft.scores : [];
+  const issues = [];
+  const genericReason = /verify how\s+.+\s+fits\s+.+|draft hypothesis\s*\([^)]*\)\s*:\s*verify/i;
+  const genericName = /^(?:option [a-z0-9]+|take the leading path|keep the current path)$/i;
+  if (options.length < 2 || options.length > 3) issues.push("use two or three distinct options");
+  if (criteria.length !== 4) issues.push("return exactly four criteria");
+  if (scores.length !== options.length * criteria.length) issues.push("include one score and reason for every option/criterion pair");
+  if (scores.some((item) => cleanLong(item?.reasoning, 800).length < 12 || genericReason.test(cleanLong(item?.reasoning, 800)))) issues.push("replace generic score reasons with context-specific reasoning");
+  if (!Array.isArray(draft.assumptions) || draft.assumptions.length !== 3) issues.push("return exactly three assumptions");
+  if (!Array.isArray(draft.risks) || draft.risks.length < options.length) issues.push("return one complete risk per option");
+  if (!Array.isArray(draft.premortem) || draft.premortem.length !== MAX_PREMORTEM_ITEMS) issues.push("return exactly five premortem items");
+  if (options.some((item) => genericName.test(clean(item?.name, 100)))) issues.push("replace placeholder option names with realistic paths");
+  if (decision) {
+    const stopWords = new Set(["about", "after", "before", "could", "first", "from", "have", "into", "more", "should", "than", "that", "their", "there", "these", "they", "this", "what", "when", "where", "which", "with", "would"]);
+    const sourceTokens = [...new Set(`${decision.title || ""} ${decision.context || ""}`.toLowerCase().match(/[a-z0-9]+/g) || [])]
+      .filter((token) => token.length >= 4 && !stopWords.has(token));
+    const renderedDraft = JSON.stringify(draft).toLowerCase();
+    const overlap = sourceTokens.filter((token) => renderedDraft.includes(token));
+    if (sourceTokens.length >= 2 && overlap.length < Math.min(2, sourceTokens.length)) issues.push("ground the draft in at least two specific terms from the user's decision");
+  }
+  return [...new Set(issues)];
+}
+
 export function applyDecisionDraft(decision, raw, { source = "local", generatedAt = new Date().toISOString() } = {}) {
   if (!isDecisionDraftPayload(raw)) throw new Error("Anna returned an incomplete first draft.");
   const expanded = expandCompactDraft(raw);
@@ -431,6 +476,7 @@ export function applyDecisionDraft(decision, raw, { source = "local", generatedA
   const scoreItems = Array.isArray(candidate.scores) ? candidate.scores : [];
   const ratings = Object.fromEntries(options.map((option) => [option.id, Object.fromEntries(criteria.map((criterion) => [criterion.id, 3]))]));
   const evidence = Object.fromEntries(options.map((option) => [option.id, Object.fromEntries(criteria.map((criterion) => [criterion.id, "Draft hypothesis — replace with an observable fact."]))]));
+  const evidenceSources = Object.fromEntries(options.map((option) => [option.id, Object.fromEntries(criteria.map((criterion) => [criterion.id, "ai"]))]));
   options.forEach((option, optionIndex) => criteria.forEach((criterion, criterionIndex) => {
     const item = scoreItems.find((entry) => lookup(options, entry?.option, optionIndex)?.name === option.name && lookup(criteria, entry?.criterion, criterionIndex)?.name === criterion.name);
     const fallbackRating = fallback.ratings[fallback.options[optionIndex]?.name]?.[fallback.criteria[criterionIndex]?.name] || 3;
@@ -445,6 +491,7 @@ export function applyDecisionDraft(decision, raw, { source = "local", generatedA
   decision.criteria = criteria;
   decision.ratings = ratings;
   decision.evidence = evidence;
+  decision.evidenceSources = evidenceSources;
   decision.deadline = dateOnly(candidate.deadline) || dateOnly(fallback.deadline);
   decision.assumptions = assumptions;
   decision.risks = risks;
@@ -478,7 +525,7 @@ export function compareInsight(decision) {
     reason: leader && strongest ? `The lead is carried most by ${strongest.name} (${strongest.rating}/5), contributing ${strongest.points.toFixed(1)} points to the current score.` : "Each rating contributes to the normalized score.",
     weight: topCriterion ? `${topCriterion.name} has the highest current weight (${topCriterion.weight}). A change here matters more than a small shift in a low-weight criterion.` : "Weights are normalized automatically.",
     sensitivity: sensitivity.stable ? "The current leader survives a practical ±20-point weight test." : sensitivity.summary,
-    evidence: leader ? `${leader.evidenceCoverage}% of the leader's rating cells have supporting notes.` : "Add evidence notes to make the comparison defensible.",
+    evidence: leader ? `${leader.evidenceCoverage}% of the leader's rating cells have user-confirmed support.` : "Add user-confirmed evidence to make the comparison defensible.",
   };
 }
 
@@ -492,7 +539,10 @@ export function calculateScores(decision) {
       return { criterionId: criterion.id, name: criterion.name, rating, points };
     });
     const score = contributions.reduce((sum, item) => sum + item.points, 0);
-    const evidenceCount = decision.criteria.filter((criterion) => cleanLong(decision.evidence?.[option.id]?.[criterion.id]).length >= 8).length;
+    const evidenceCount = decision.criteria.filter((criterion) => {
+      const note = cleanLong(decision.evidence?.[option.id]?.[criterion.id]);
+      return note.length >= 8 && decision.evidenceSources?.[option.id]?.[criterion.id] === "user";
+    }).length;
     return {
       optionId: option.id,
       name: option.name,
@@ -514,17 +564,20 @@ export function confidenceLens(decision) {
   const assumptionConfidence = decision.assumptions.length
     ? Math.round((decision.assumptions.reduce((sum, item) => sum + item.confidence, 0) / (decision.assumptions.length * 5)) * 100)
     : 50;
-  const riskLoad = decision.risks.reduce((sum, risk) => sum + risk.likelihood * risk.impact, 0);
+  const scoreSeparation = Math.round(clamp((gap / 20) * 100, 0, 100));
+  const riskPreparedness = decision.risks.length
+    ? Math.round((decision.risks.filter((risk) => clean(risk.mitigation, 600).length >= 8).length / decision.risks.length) * 100)
+    : 0;
   const readiness = Math.round(clamp(
-    evidenceCoverage * 0.45 + assumptionConfidence * 0.25 + Math.min(gap * 3, 30) - Math.min(riskLoad, 25) * 0.2 + 15,
+    evidenceCoverage * 0.45 + assumptionConfidence * 0.30 + scoreSeparation * 0.15 + riskPreparedness * 0.10,
     0,
     100,
   ));
-  let label = "Fragile";
-  if (readiness >= 76) label = "Well supported";
-  else if (readiness >= 56) label = "Promising";
-  else if (readiness >= 36) label = "Still uncertain";
-  return { readiness, label, gap, evidenceCoverage, assumptionConfidence, riskLoad, leader: first || null };
+  let label = "Early working draft";
+  if (readiness >= 80) label = "Ready for a decision";
+  else if (readiness >= 60) label = "Structured, still uncertain";
+  else if (readiness >= 40) label = "Needs stronger support";
+  return { readiness, label, gap, evidenceCoverage, assumptionConfidence, scoreSeparation, riskPreparedness, leader: first || null };
 }
 
 export function sensitivityAnalysis(decision) {
@@ -613,17 +666,17 @@ export function buildFallbackAnalysis(decision, type = "advisor") {
     advisor: "Reduce one important uncertainty before you commit.",
   };
   const blindSpots = [];
-  if (lens.evidenceCoverage < 60) blindSpots.push(`Only ${lens.evidenceCoverage}% of rating cells have supporting notes; the remaining scores are judgments without recorded evidence.`);
+  if (lens.evidenceCoverage < 60) blindSpots.push(`Only ${lens.evidenceCoverage}% of rating cells have user-confirmed support; the remaining scores rely on unverified reasoning or have no recorded basis.`);
   if (!decision.assumptions.length) blindSpots.push("No assumptions are recorded, so the beliefs underneath the ratings are still hidden.");
   if (!decision.risks.length) blindSpots.push("No risks are recorded for the options, which makes downside comparisons incomplete.");
   if (decision.options.length === 2) blindSpots.push("The room contains only two options; a hybrid, delay, or small pilot may be missing.");
-  if (!blindSpots.length) blindSpots.push(`The least-supported option is ${weakestEvidence?.name || "not yet identifiable"} at ${weakestEvidence?.evidenceCoverage || 0}% evidence coverage.`);
+  if (!blindSpots.length) blindSpots.push(`The least-supported option is ${weakestEvidence?.name || "not yet identifiable"} at ${weakestEvidence?.evidenceCoverage || 0}% user-confirmed support.`);
 
   return normalizeAnalysis({
     source: "local",
     type,
     headline: modeHeadlines[type] || modeHeadlines.advisor,
-    summary: `${gapText}, with ${lens.evidenceCoverage}% average evidence coverage. This local fallback reads only the scores, notes, assumptions, and risks saved in this room.`,
+    summary: `${gapText}, with ${lens.evidenceCoverage}% average user-confirmed support. This local fallback reads only the scores, notes, assumptions, and risks saved in this room.`,
     blindSpots,
     questions: [topCriterion ? `What observable evidence would justify the current ${topCriterion.name} ratings?` : "What fact would most change the current ranking?"],
     scenarios: [
@@ -655,7 +708,7 @@ export function buildFallbackCoachResponse(decision, question) {
     return `${prefix}\n\nMake the next step smaller than the final commitment: run a time-boxed trial, request concrete evidence, or delay only long enough to test the highest-weighted criterion. The goal is to learn before the expensive part becomes irreversible.`;
   }
   if (prompt.includes("rational") || prompt.includes("bias")) {
-    return `${prefix}\n\n${leader} currently leads by ${lens.gap} points with ${lens.evidenceCoverage}% evidence coverage. Ask which rating you would defend differently if the option names were hidden; that is the first place to look for motivated reasoning.`;
+    return `${prefix}\n\n${leader} currently leads by ${lens.gap} points with ${lens.evidenceCoverage}% user-confirmed support. Ask which rating you would defend differently if the option names were hidden; that is the first place to look for motivated reasoning.`;
   }
   if (prompt.includes("missing") || prompt.includes("option")) {
     return `${prefix}\n\nTest whether the room is forcing a false either/or. Consider a pilot, a negotiated variant, a deliberate delay with a deadline, or a combination that preserves the strongest benefit of each option.`;
@@ -701,16 +754,19 @@ export function buildAnalysisPrompt(decision, type) {
   for (const option of decision.options) {
     for (const criterion of decision.criteria) {
       const note = cleanLong(decision.evidence?.[option.id]?.[criterion.id], 500);
-      if (note) evidenceLines.push(`- ${option.name} / ${criterion.name}: ${note}`);
+      if (note) {
+        const source = decision.evidenceSources?.[option.id]?.[criterion.id] === "user" ? "USER-CONFIRMED" : "AI INFERENCE";
+        evidenceLines.push(`- [${source}] ${option.name} / ${criterion.name}: ${note}`);
+      }
     }
   }
-  return `/no_think\nANALYSIS MODE: ${analysisLabels[type] || analysisLabels.advisor}\n\nDECISION\n${decision.title}\n\nCONTEXT\n${decision.context || "No additional context provided."}\n\nOPTIONS AND CURRENT SCORES\n${scores.map((item) => `- ${item.name}: ${item.score}/100; evidence coverage ${item.evidenceCoverage}%`).join("\n")}\n\nCRITERIA\n${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}\n\nEVIDENCE NOTES\n${evidenceLines.join("\n") || "No evidence notes recorded yet."}\n\nASSUMPTIONS\n${decision.assumptions.map((item) => `- ${item.text} (confidence ${item.confidence}/5)`).join("\n") || "None recorded."}\n\nRISKS\n${decision.risks.map((item) => `- ${item.text} (likelihood ${item.likelihood}/5, impact ${item.impact}/5)`).join("\n") || "None recorded."}\n\nReturn exactly one JSON object with this shape:\n{\n  "headline": "specific insight, not a generic title",\n  "summary": "concise evidence-aware synthesis",\n  "blindSpots": ["missing fact, bias, or assumption"],\n  "questions": ["high-value question to answer next"],\n  "scenarios": ["scenario and what would make it more likely"],\n  "experiments": ["small reversible action that reduces uncertainty"],\n  "recommendation": "conditional recommendation that names the evidence behind it",\n  "caveat": "what the available information cannot establish",\n  "premortem": [{"cause":"failure cause","warning":"early warning signal","mitigation":"preventive action"}]\n}\nFor PREMORTEM mode, return exactly five premortem items. Use only the user's supplied decision data. Treat scores as subjective inputs, not facts. Never claim external research or certainty. Return JSON only.`;
+  return `/no_think\nANALYSIS MODE: ${analysisLabels[type] || analysisLabels.advisor}\n\nDECISION\n${decision.title}\n\nCONTEXT\n${decision.context || "No additional context provided."}\n\nOPTIONS AND CURRENT SCORES\n${scores.map((item) => `- ${item.name}: ${item.score}/100; user-confirmed support ${item.evidenceCoverage}%`).join("\n")}\n\nCRITERIA\n${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}\n\nEVIDENCE AND INFERENCE NOTES\n${evidenceLines.join("\n") || "No notes recorded yet."}\n\nASSUMPTIONS\n${decision.assumptions.map((item) => `- ${item.text} (confidence ${item.confidence}/5)`).join("\n") || "None recorded."}\n\nRISKS\n${decision.risks.map((item) => `- ${item.text} (likelihood ${item.likelihood}/5, impact ${item.impact}/5)`).join("\n") || "None recorded."}\n\nReturn exactly one JSON object with this shape:\n{\n  "headline": "specific insight, not a generic title",\n  "summary": "concise evidence-aware synthesis",\n  "blindSpots": ["missing fact, bias, or assumption"],\n  "questions": ["high-value question to answer next"],\n  "scenarios": ["scenario and what would make it more likely"],\n  "experiments": ["small reversible action that reduces uncertainty"],\n  "recommendation": "conditional recommendation that names the evidence behind it",\n  "caveat": "what the available information cannot establish",\n  "premortem": [{"cause":"failure cause","warning":"early warning signal","mitigation":"preventive action"}]\n}\nFor PREMORTEM mode, return exactly five premortem items. Use only the user's supplied decision data. Treat scores and AI inference notes as subjective inputs, not verified facts. Never claim external research or certainty. Return JSON only.`;
 }
 
 export function buildCoachPrompt(decision, question) {
   const scores = calculateScores(decision);
   const recentCoach = decision.coach.slice(-8).map((message) => `${message.role === "assistant" ? "COACH" : "USER"}: ${message.text}`).join("\n");
-  return `/no_think\nACTIVE DECISION\n${decision.title}\n\nCONTEXT\n${decision.context || "No additional context provided."}\n\nOPTIONS AND SCORES\n${scores.map((item) => `- ${item.name}: ${item.score}/100, ${item.evidenceCoverage}% evidence coverage`).join("\n")}\n\nCRITERIA\n${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}\n\nASSUMPTIONS\n${decision.assumptions.map((item) => `- ${item.text} (${item.confidence}/5 confidence)`).join("\n") || "None recorded."}\n\nRISKS\n${decision.risks.map((item) => `- ${item.text} (${item.likelihood}×${item.impact})`).join("\n") || "None recorded."}\n\nRECENT CONVERSATION\n${recentCoach || "This is the first message."}\n\nUSER QUESTION\n${cleanLong(question, 1200)}\n\nAnswer as a concise decision coach. Ground every specific observation in the supplied decision. Distinguish the user's evidence from your inference. Ask at most one sharp follow-up question. Do not claim external research, do not make the decision for the user, and do not output JSON.`;
+  return `/no_think\nACTIVE DECISION\n${decision.title}\n\nCONTEXT\n${decision.context || "No additional context provided."}\n\nOPTIONS AND SCORES\n${scores.map((item) => `- ${item.name}: ${item.score}/100, ${item.evidenceCoverage}% user-confirmed support`).join("\n")}\n\nCRITERIA\n${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}\n\nASSUMPTIONS\n${decision.assumptions.map((item) => `- ${item.text} (${item.confidence}/5 confidence)`).join("\n") || "None recorded."}\n\nRISKS\n${decision.risks.map((item) => `- ${item.text} (${item.likelihood}×${item.impact})`).join("\n") || "None recorded."}\n\nRECENT CONVERSATION\n${recentCoach || "This is the first message."}\n\nUSER QUESTION\n${cleanLong(question, 1200)}\n\nAnswer as a concise decision coach. Ground every specific observation in the supplied decision. Distinguish user-confirmed evidence from AI inference. Ask at most one sharp follow-up question. Do not claim external research, do not make the decision for the user, and do not output JSON.`;
 }
 
 export function decisionProgress(decision) {
@@ -749,14 +805,17 @@ export function duplicateDecision(decision, now = new Date()) {
   });
   copy.ratings = {};
   copy.evidence = {};
+  copy.evidenceSources = {};
   for (const oldOption of decision.options) {
     const newOptionId = ids.get(oldOption.id);
     copy.ratings[newOptionId] = {};
     copy.evidence[newOptionId] = {};
+    copy.evidenceSources[newOptionId] = {};
     for (const oldCriterion of decision.criteria) {
       const newCriterionId = criterionIds.get(oldCriterion.id);
       copy.ratings[newOptionId][newCriterionId] = decision.ratings?.[oldOption.id]?.[oldCriterion.id] ?? 3;
       copy.evidence[newOptionId][newCriterionId] = decision.evidence?.[oldOption.id]?.[oldCriterion.id] ?? "";
+      copy.evidenceSources[newOptionId][newCriterionId] = decision.evidenceSources?.[oldOption.id]?.[oldCriterion.id] ?? "unknown";
     }
   }
   if (copy.commitSuggestion) copy.commitSuggestion.optionId = ids.get(decision.commitSuggestion?.optionId) || copy.options[0].id;

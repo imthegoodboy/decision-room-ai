@@ -121,6 +121,10 @@ function createDecision(input = {}, now = /* @__PURE__ */ new Date()) {
     option.id,
     Object.fromEntries(criteria.map((criterion) => [criterion.id, ""]))
   ]));
+  const evidenceSources = Object.fromEntries(options.map((option) => [
+    option.id,
+    Object.fromEntries(criteria.map((criterion) => [criterion.id, "none"]))
+  ]));
   const timestamp = now.toISOString();
   return {
     id,
@@ -136,6 +140,7 @@ function createDecision(input = {}, now = /* @__PURE__ */ new Date()) {
     criteria,
     ratings,
     evidence,
+    evidenceSources,
     assumptions: [],
     risks: [],
     analyses: [],
@@ -165,12 +170,17 @@ function normalizeDecision(raw, now = /* @__PURE__ */ new Date()) {
   while (criteria.length < 2) criteria.push({ id: createId("criterion"), name: `Criterion ${criteria.length + 1}`, weight: 10, description: "" });
   const ratings = {};
   const evidence = {};
+  const evidenceSources = {};
   for (const option of options) {
     ratings[option.id] = {};
     evidence[option.id] = {};
+    evidenceSources[option.id] = {};
     for (const criterion of criteria) {
       ratings[option.id][criterion.id] = clamp(raw.ratings?.[option.id]?.[criterion.id] ?? 3, 1, 5);
-      evidence[option.id][criterion.id] = cleanLong(raw.evidence?.[option.id]?.[criterion.id], 800);
+      const note = cleanLong(raw.evidence?.[option.id]?.[criterion.id], 800);
+      const storedSource = raw.evidenceSources?.[option.id]?.[criterion.id];
+      evidence[option.id][criterion.id] = note;
+      evidenceSources[option.id][criterion.id] = !note ? "none" : ["user", "ai", "unknown"].includes(storedSource) ? storedSource : raw.draftMeta ? "ai" : "unknown";
     }
   }
   const assumptions = Array.isArray(raw.assumptions) ? raw.assumptions.slice(0, 16).map((item) => ({
@@ -244,6 +254,7 @@ function normalizeDecision(raw, now = /* @__PURE__ */ new Date()) {
     criteria,
     ratings,
     evidence,
+    evidenceSources,
     assumptions,
     risks,
     analyses,
@@ -390,6 +401,32 @@ function isDecisionDraftPayload(raw) {
   if (!criteria.every((item) => compact ? Array.isArray(item) && String(item?.[0] || "").trim() : String(item?.name || "").trim())) return false;
   return true;
 }
+function decisionDraftQualityIssues(raw, decision = null) {
+  if (!isDecisionDraftPayload(raw)) return ["incomplete structure"];
+  const draft = expandCompactDraft(raw);
+  const options = Array.isArray(draft.options) ? draft.options : [];
+  const criteria = Array.isArray(draft.criteria) ? draft.criteria : [];
+  const scores = Array.isArray(draft.scores) ? draft.scores : [];
+  const issues = [];
+  const genericReason = /verify how\s+.+\s+fits\s+.+|draft hypothesis\s*\([^)]*\)\s*:\s*verify/i;
+  const genericName = /^(?:option [a-z0-9]+|take the leading path|keep the current path)$/i;
+  if (options.length < 2 || options.length > 3) issues.push("use two or three distinct options");
+  if (criteria.length !== 4) issues.push("return exactly four criteria");
+  if (scores.length !== options.length * criteria.length) issues.push("include one score and reason for every option/criterion pair");
+  if (scores.some((item) => cleanLong(item?.reasoning, 800).length < 12 || genericReason.test(cleanLong(item?.reasoning, 800)))) issues.push("replace generic score reasons with context-specific reasoning");
+  if (!Array.isArray(draft.assumptions) || draft.assumptions.length !== 3) issues.push("return exactly three assumptions");
+  if (!Array.isArray(draft.risks) || draft.risks.length < options.length) issues.push("return one complete risk per option");
+  if (!Array.isArray(draft.premortem) || draft.premortem.length !== MAX_PREMORTEM_ITEMS) issues.push("return exactly five premortem items");
+  if (options.some((item) => genericName.test(clean(item?.name, 100)))) issues.push("replace placeholder option names with realistic paths");
+  if (decision) {
+    const stopWords = /* @__PURE__ */ new Set(["about", "after", "before", "could", "first", "from", "have", "into", "more", "should", "than", "that", "their", "there", "these", "they", "this", "what", "when", "where", "which", "with", "would"]);
+    const sourceTokens = [...new Set(`${decision.title || ""} ${decision.context || ""}`.toLowerCase().match(/[a-z0-9]+/g) || [])].filter((token) => token.length >= 4 && !stopWords.has(token));
+    const renderedDraft = JSON.stringify(draft).toLowerCase();
+    const overlap = sourceTokens.filter((token) => renderedDraft.includes(token));
+    if (sourceTokens.length >= 2 && overlap.length < Math.min(2, sourceTokens.length)) issues.push("ground the draft in at least two specific terms from the user's decision");
+  }
+  return [...new Set(issues)];
+}
 function applyDecisionDraft(decision, raw, { source = "local", generatedAt = (/* @__PURE__ */ new Date()).toISOString() } = {}) {
   if (!isDecisionDraftPayload(raw)) throw new Error("Anna returned an incomplete first draft.");
   const expanded = expandCompactDraft(raw);
@@ -409,6 +446,7 @@ function applyDecisionDraft(decision, raw, { source = "local", generatedAt = (/*
   const scoreItems = Array.isArray(candidate.scores) ? candidate.scores : [];
   const ratings = Object.fromEntries(options.map((option) => [option.id, Object.fromEntries(criteria.map((criterion) => [criterion.id, 3]))]));
   const evidence = Object.fromEntries(options.map((option) => [option.id, Object.fromEntries(criteria.map((criterion) => [criterion.id, "Draft hypothesis \u2014 replace with an observable fact."]))]));
+  const evidenceSources = Object.fromEntries(options.map((option) => [option.id, Object.fromEntries(criteria.map((criterion) => [criterion.id, "ai"]))]));
   options.forEach((option, optionIndex) => criteria.forEach((criterion, criterionIndex) => {
     const item = scoreItems.find((entry) => lookup(options, entry?.option, optionIndex)?.name === option.name && lookup(criteria, entry?.criterion, criterionIndex)?.name === criterion.name);
     const fallbackRating = fallback.ratings[fallback.options[optionIndex]?.name]?.[fallback.criteria[criterionIndex]?.name] || 3;
@@ -423,6 +461,7 @@ function applyDecisionDraft(decision, raw, { source = "local", generatedAt = (/*
   decision.criteria = criteria;
   decision.ratings = ratings;
   decision.evidence = evidence;
+  decision.evidenceSources = evidenceSources;
   decision.deadline = dateOnly(candidate.deadline) || dateOnly(fallback.deadline);
   decision.assumptions = assumptions;
   decision.risks = risks;
@@ -455,7 +494,7 @@ function compareInsight(decision) {
     reason: leader && strongest ? `The lead is carried most by ${strongest.name} (${strongest.rating}/5), contributing ${strongest.points.toFixed(1)} points to the current score.` : "Each rating contributes to the normalized score.",
     weight: topCriterion ? `${topCriterion.name} has the highest current weight (${topCriterion.weight}). A change here matters more than a small shift in a low-weight criterion.` : "Weights are normalized automatically.",
     sensitivity: sensitivity.stable ? "The current leader survives a practical \xB120-point weight test." : sensitivity.summary,
-    evidence: leader ? `${leader.evidenceCoverage}% of the leader's rating cells have supporting notes.` : "Add evidence notes to make the comparison defensible."
+    evidence: leader ? `${leader.evidenceCoverage}% of the leader's rating cells have user-confirmed support.` : "Add user-confirmed evidence to make the comparison defensible."
   };
 }
 function calculateScores(decision) {
@@ -468,7 +507,10 @@ function calculateScores(decision) {
       return { criterionId: criterion.id, name: criterion.name, rating, points };
     });
     const score = contributions.reduce((sum, item) => sum + item.points, 0);
-    const evidenceCount = decision.criteria.filter((criterion) => cleanLong(decision.evidence?.[option.id]?.[criterion.id]).length >= 8).length;
+    const evidenceCount = decision.criteria.filter((criterion) => {
+      const note = cleanLong(decision.evidence?.[option.id]?.[criterion.id]);
+      return note.length >= 8 && decision.evidenceSources?.[option.id]?.[criterion.id] === "user";
+    }).length;
     return {
       optionId: option.id,
       name: option.name,
@@ -485,17 +527,18 @@ function confidenceLens(decision) {
   const gap = first && second ? Math.round((first.score - second.score) * 10) / 10 : 0;
   const evidenceCoverage = scores.length ? Math.round(scores.reduce((sum, option) => sum + option.evidenceCoverage, 0) / scores.length) : 0;
   const assumptionConfidence = decision.assumptions.length ? Math.round(decision.assumptions.reduce((sum, item) => sum + item.confidence, 0) / (decision.assumptions.length * 5) * 100) : 50;
-  const riskLoad = decision.risks.reduce((sum, risk) => sum + risk.likelihood * risk.impact, 0);
+  const scoreSeparation = Math.round(clamp(gap / 20 * 100, 0, 100));
+  const riskPreparedness = decision.risks.length ? Math.round(decision.risks.filter((risk) => clean(risk.mitigation, 600).length >= 8).length / decision.risks.length * 100) : 0;
   const readiness = Math.round(clamp(
-    evidenceCoverage * 0.45 + assumptionConfidence * 0.25 + Math.min(gap * 3, 30) - Math.min(riskLoad, 25) * 0.2 + 15,
+    evidenceCoverage * 0.45 + assumptionConfidence * 0.3 + scoreSeparation * 0.15 + riskPreparedness * 0.1,
     0,
     100
   ));
-  let label = "Fragile";
-  if (readiness >= 76) label = "Well supported";
-  else if (readiness >= 56) label = "Promising";
-  else if (readiness >= 36) label = "Still uncertain";
-  return { readiness, label, gap, evidenceCoverage, assumptionConfidence, riskLoad, leader: first || null };
+  let label = "Early working draft";
+  if (readiness >= 80) label = "Ready for a decision";
+  else if (readiness >= 60) label = "Structured, still uncertain";
+  else if (readiness >= 40) label = "Needs stronger support";
+  return { readiness, label, gap, evidenceCoverage, assumptionConfidence, scoreSeparation, riskPreparedness, leader: first || null };
 }
 function sensitivityAnalysis(decision) {
   const base = calculateScores(decision);
@@ -572,16 +615,16 @@ function buildFallbackAnalysis(decision, type = "advisor") {
     advisor: "Reduce one important uncertainty before you commit."
   };
   const blindSpots = [];
-  if (lens.evidenceCoverage < 60) blindSpots.push(`Only ${lens.evidenceCoverage}% of rating cells have supporting notes; the remaining scores are judgments without recorded evidence.`);
+  if (lens.evidenceCoverage < 60) blindSpots.push(`Only ${lens.evidenceCoverage}% of rating cells have user-confirmed support; the remaining scores rely on unverified reasoning or have no recorded basis.`);
   if (!decision.assumptions.length) blindSpots.push("No assumptions are recorded, so the beliefs underneath the ratings are still hidden.");
   if (!decision.risks.length) blindSpots.push("No risks are recorded for the options, which makes downside comparisons incomplete.");
   if (decision.options.length === 2) blindSpots.push("The room contains only two options; a hybrid, delay, or small pilot may be missing.");
-  if (!blindSpots.length) blindSpots.push(`The least-supported option is ${weakestEvidence?.name || "not yet identifiable"} at ${weakestEvidence?.evidenceCoverage || 0}% evidence coverage.`);
+  if (!blindSpots.length) blindSpots.push(`The least-supported option is ${weakestEvidence?.name || "not yet identifiable"} at ${weakestEvidence?.evidenceCoverage || 0}% user-confirmed support.`);
   return normalizeAnalysis({
     source: "local",
     type,
     headline: modeHeadlines[type] || modeHeadlines.advisor,
-    summary: `${gapText}, with ${lens.evidenceCoverage}% average evidence coverage. This local fallback reads only the scores, notes, assumptions, and risks saved in this room.`,
+    summary: `${gapText}, with ${lens.evidenceCoverage}% average user-confirmed support. This local fallback reads only the scores, notes, assumptions, and risks saved in this room.`,
     blindSpots,
     questions: [topCriterion ? `What observable evidence would justify the current ${topCriterion.name} ratings?` : "What fact would most change the current ranking?"],
     scenarios: [
@@ -618,7 +661,7 @@ Make the next step smaller than the final commitment: run a time-boxed trial, re
   if (prompt.includes("rational") || prompt.includes("bias")) {
     return `${prefix}
 
-${leader} currently leads by ${lens.gap} points with ${lens.evidenceCoverage}% evidence coverage. Ask which rating you would defend differently if the option names were hidden; that is the first place to look for motivated reasoning.`;
+${leader} currently leads by ${lens.gap} points with ${lens.evidenceCoverage}% user-confirmed support. Ask which rating you would defend differently if the option names were hidden; that is the first place to look for motivated reasoning.`;
   }
   if (prompt.includes("missing") || prompt.includes("option")) {
     return `${prefix}
@@ -663,7 +706,10 @@ function buildAnalysisPrompt(decision, type) {
   for (const option of decision.options) {
     for (const criterion of decision.criteria) {
       const note = cleanLong(decision.evidence?.[option.id]?.[criterion.id], 500);
-      if (note) evidenceLines.push(`- ${option.name} / ${criterion.name}: ${note}`);
+      if (note) {
+        const source = decision.evidenceSources?.[option.id]?.[criterion.id] === "user" ? "USER-CONFIRMED" : "AI INFERENCE";
+        evidenceLines.push(`- [${source}] ${option.name} / ${criterion.name}: ${note}`);
+      }
     }
   }
   return `/no_think
@@ -676,13 +722,13 @@ CONTEXT
 ${decision.context || "No additional context provided."}
 
 OPTIONS AND CURRENT SCORES
-${scores.map((item) => `- ${item.name}: ${item.score}/100; evidence coverage ${item.evidenceCoverage}%`).join("\n")}
+${scores.map((item) => `- ${item.name}: ${item.score}/100; user-confirmed support ${item.evidenceCoverage}%`).join("\n")}
 
 CRITERIA
 ${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}
 
-EVIDENCE NOTES
-${evidenceLines.join("\n") || "No evidence notes recorded yet."}
+EVIDENCE AND INFERENCE NOTES
+${evidenceLines.join("\n") || "No notes recorded yet."}
 
 ASSUMPTIONS
 ${decision.assumptions.map((item) => `- ${item.text} (confidence ${item.confidence}/5)`).join("\n") || "None recorded."}
@@ -702,7 +748,7 @@ Return exactly one JSON object with this shape:
   "caveat": "what the available information cannot establish",
   "premortem": [{"cause":"failure cause","warning":"early warning signal","mitigation":"preventive action"}]
 }
-For PREMORTEM mode, return exactly five premortem items. Use only the user's supplied decision data. Treat scores as subjective inputs, not facts. Never claim external research or certainty. Return JSON only.`;
+For PREMORTEM mode, return exactly five premortem items. Use only the user's supplied decision data. Treat scores and AI inference notes as subjective inputs, not verified facts. Never claim external research or certainty. Return JSON only.`;
 }
 function buildCoachPrompt(decision, question) {
   const scores = calculateScores(decision);
@@ -715,7 +761,7 @@ CONTEXT
 ${decision.context || "No additional context provided."}
 
 OPTIONS AND SCORES
-${scores.map((item) => `- ${item.name}: ${item.score}/100, ${item.evidenceCoverage}% evidence coverage`).join("\n")}
+${scores.map((item) => `- ${item.name}: ${item.score}/100, ${item.evidenceCoverage}% user-confirmed support`).join("\n")}
 
 CRITERIA
 ${decision.criteria.map((item) => `- ${item.name}: weight ${item.weight}`).join("\n")}
@@ -732,7 +778,7 @@ ${recentCoach || "This is the first message."}
 USER QUESTION
 ${cleanLong(question, 1200)}
 
-Answer as a concise decision coach. Ground every specific observation in the supplied decision. Distinguish the user's evidence from your inference. Ask at most one sharp follow-up question. Do not claim external research, do not make the decision for the user, and do not output JSON.`;
+Answer as a concise decision coach. Ground every specific observation in the supplied decision. Distinguish user-confirmed evidence from AI inference. Ask at most one sharp follow-up question. Do not claim external research, do not make the decision for the user, and do not output JSON.`;
 }
 function decisionProgress(decision) {
   let completed = 1;
@@ -769,14 +815,17 @@ function duplicateDecision(decision, now = /* @__PURE__ */ new Date()) {
   });
   copy.ratings = {};
   copy.evidence = {};
+  copy.evidenceSources = {};
   for (const oldOption of decision.options) {
     const newOptionId = ids.get(oldOption.id);
     copy.ratings[newOptionId] = {};
     copy.evidence[newOptionId] = {};
+    copy.evidenceSources[newOptionId] = {};
     for (const oldCriterion of decision.criteria) {
       const newCriterionId = criterionIds.get(oldCriterion.id);
       copy.ratings[newOptionId][newCriterionId] = decision.ratings?.[oldOption.id]?.[oldCriterion.id] ?? 3;
       copy.evidence[newOptionId][newCriterionId] = decision.evidence?.[oldOption.id]?.[oldCriterion.id] ?? "";
+      copy.evidenceSources[newOptionId][newCriterionId] = decision.evidenceSources?.[oldOption.id]?.[oldCriterion.id] ?? "unknown";
     }
   }
   if (copy.commitSuggestion) copy.commitSuggestion.optionId = ids.get(decision.commitSuggestion?.optionId) || copy.options[0].id;
@@ -810,6 +859,55 @@ var paths = {
 };
 function icon(name, className = "") {
   return `<svg class="icon ${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.spark}</svg>`;
+}
+
+// src/markdown.js
+var escapeHtml = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+function renderInline(value) {
+  return escapeHtml(value).replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>").replace(/__([^_\n]+)__/g, "<strong>$1</strong>").replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>").replace(/(^|[^_])_([^_\n]+)_(?!_)/g, "$1<em>$2</em>");
+}
+function renderSafeMarkdown(value) {
+  const lines = String(value ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const output = [];
+  let paragraph = [];
+  let list = null;
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    output.push(`<p>${paragraph.map(renderInline).join("<br>")}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!list) return;
+    output.push(`<${list.type}>${list.items.map((item) => `<li>${renderInline(item)}</li>`).join("")}</${list.type}>`);
+    list = null;
+  };
+  for (const line of lines) {
+    const heading = line.match(/^#{1,3}\s+(.+)$/);
+    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      output.push(`<h3>${renderInline(heading[1])}</h3>`);
+    } else if (bullet || ordered) {
+      flushParagraph();
+      const type = bullet ? "ul" : "ol";
+      if (list?.type !== type) {
+        flushList();
+        list = { type, items: [] };
+      }
+      list.items.push((bullet || ordered)[1]);
+    } else if (!line.trim()) {
+      flushParagraph();
+      flushList();
+    } else {
+      flushList();
+      paragraph.push(line);
+    }
+  }
+  flushParagraph();
+  flushList();
+  return output.join("");
 }
 
 // src/platform.js
@@ -1002,8 +1100,8 @@ var state = {
   saving: false,
   saveTimer: null
 };
-var escapeHtml = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
-var attr = escapeHtml;
+var escapeHtml2 = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+var attr = escapeHtml2;
 function parseDisplayDate(value) {
   const normalized = dateOnly(value);
   const parsed = normalized ? /* @__PURE__ */ new Date(`${normalized}T12:00:00`) : new Date(value || "");
@@ -1043,13 +1141,13 @@ function setSyncLabel(kind, text) {
   const node = document.getElementById("sync-label");
   if (!node) return;
   node.dataset.kind = kind;
-  node.innerHTML = `<span class="sync-dot" aria-hidden="true"></span>${escapeHtml(text)}`;
+  node.innerHTML = `<span class="sync-dot" aria-hidden="true"></span>${escapeHtml2(text)}`;
 }
 function toast(message, tone = "default", duration = 4200) {
   const node = document.createElement("div");
   node.className = `toast toast--${tone}`;
   node.setAttribute("role", tone === "error" ? "alert" : "status");
-  node.innerHTML = `<span>${tone === "error" ? icon("alert") : icon("spark")}</span><p>${escapeHtml(message)}</p><button type="button" aria-label="Dismiss message">${icon("close")}</button>`;
+  node.innerHTML = `<span>${tone === "error" ? icon("alert") : icon("spark")}</span><p>${escapeHtml2(message)}</p><button type="button" aria-label="Dismiss message">${icon("close")}</button>`;
   node.querySelector("button").addEventListener("click", () => node.remove());
   toastRegion.append(node);
   setTimeout(() => node.remove(), duration);
@@ -1060,8 +1158,8 @@ function showBusy(title, detail) {
   busyRoot.innerHTML = `<div class="busy-dialog" role="status" aria-live="polite">
     <div class="thinking-mark" aria-hidden="true"><span></span><span></span><span></span></div>
     <p class="eyebrow">Anna is thinking</p>
-    <h2>${escapeHtml(title)}</h2>
-    <p>${escapeHtml(detail)}</p>
+    <h2>${escapeHtml2(title)}</h2>
+    <p>${escapeHtml2(detail)}</p>
   </div>`;
 }
 function hideBusy() {
@@ -1076,11 +1174,11 @@ function showConfirm({ title, message, confirmLabel = "Continue", destructive = 
       <div class="modal-core">
         <button class="icon-control modal-close" type="button" data-action="close-modal" aria-label="Close">${icon("close")}</button>
         <p class="eyebrow">Please confirm</p>
-        <h2 id="modal-title">${escapeHtml(title)}</h2>
-        <p>${escapeHtml(message)}</p>
+        <h2 id="modal-title">${escapeHtml2(title)}</h2>
+        <p>${escapeHtml2(message)}</p>
         <div class="modal-actions">
           <button class="button button--quiet" type="button" data-action="close-modal">Cancel</button>
-          <button class="button ${destructive ? "button--danger" : "button--ink"}" type="button" id="modal-confirm">${escapeHtml(confirmLabel)}</button>
+          <button class="button ${destructive ? "button--danger" : "button--ink"}" type="button" id="modal-confirm">${escapeHtml2(confirmLabel)}</button>
         </div>
       </div>
     </section>`;
@@ -1181,8 +1279,8 @@ function renderHome() {
     return `<article class="decision-row reveal">
       <a class="decision-row__main" href="${decisionUrl(decision, decision.commitment ? "review" : "frame")}">
         <div class="decision-index">${String(all.indexOf(decision) + 1).padStart(2, "0")}</div>
-        <div class="decision-copy"><span class="status-chip status-chip--${decision.status}">${statusLabel(decision)}</span><h2>${escapeHtml(decision.title)}</h2><p>${escapeHtml(decision.context || "Add context so the trade-offs become easier to test.")}</p></div>
-        <div class="decision-result"><span>${chosen ? "Chosen" : scores[0] ? "Current lead" : "Unscored"}</span><strong>${escapeHtml(chosen?.name || scores[0]?.name || "\u2014")}</strong></div>
+        <div class="decision-copy"><span class="status-chip status-chip--${decision.status}">${statusLabel(decision)}</span><h2>${escapeHtml2(decision.title)}</h2><p>${escapeHtml2(decision.context || "Add context so the trade-offs become easier to test.")}</p></div>
+        <div class="decision-result"><span>${chosen ? "Chosen" : scores[0] ? "Current lead" : "Unscored"}</span><strong>${escapeHtml2(chosen?.name || scores[0]?.name || "\u2014")}</strong></div>
         ${progressRing(decisionProgress(decision))}
       </a>
       <button class="icon-control row-menu" type="button" data-action="decision-menu" data-id="${attr(decision.id)}" aria-label="More actions for ${attr(decision.title)}">${icon("more")}</button>
@@ -1232,14 +1330,14 @@ function renderNew() {
         </details>
         <div class="composer-action"><p>Your decision stays yours. Anna prepares the analysis.</p><button class="button button--accent button--nested" type="submit"><span>Build my first draft</span><i>${icon("arrow")}</i></button></div>
       </div>
-      <fieldset class="template-fieldset"><legend><span>Optional starting frames</span><small>Choose one only if it helps.</small></legend><div class="template-grid">${Object.entries(TEMPLATES).map(([key, template]) => `<label class="template-choice ${state.selectedTemplate === key ? "is-selected" : ""}"><input type="radio" name="template" value="${key}" ${state.selectedTemplate === key ? "checked" : ""}><span class="template-mark">${templateIcon(key)}</span><span><small>${escapeHtml(template.eyebrow)}</small><strong>${escapeHtml(template.name)}</strong></span></label>`).join("")}</div></fieldset>
+      <fieldset class="template-fieldset"><legend><span>Optional starting frames</span><small>Choose one only if it helps.</small></legend><div class="template-grid">${Object.entries(TEMPLATES).map(([key, template]) => `<label class="template-choice ${state.selectedTemplate === key ? "is-selected" : ""}"><input type="radio" name="template" value="${key}" ${state.selectedTemplate === key ? "checked" : ""}><span class="template-mark">${templateIcon(key)}</span><span><small>${escapeHtml2(template.eyebrow)}</small><strong>${escapeHtml2(template.name)}</strong></span></label>`).join("")}</div></fieldset>
     </form>
   </div>`);
 }
 function stageHeader(decision, view, eyebrow, title, description) {
   const progress = decisionProgress(decision);
   return `<header class="stage-header reveal">
-    <div class="stage-heading"><p class="eyebrow">${escapeHtml(eyebrow)}</p><h1>${title}</h1><p>${escapeHtml(description)}</p></div>
+    <div class="stage-heading"><p class="eyebrow">${escapeHtml2(eyebrow)}</p><h1>${title}</h1><p>${escapeHtml2(description)}</p></div>
     <div class="stage-meta"><span>${statusLabel(decision)}</span>${progressRing(progress)}<button class="icon-control" type="button" data-action="decision-menu" data-id="${attr(decision.id)}" aria-label="Decision actions">${icon("more")}</button></div>
   </header>
   <nav class="stage-tabs reveal" aria-label="Decision workflow">
@@ -1253,9 +1351,9 @@ function draftStudio(decision) {
   const status = state.draftBusy ? "Anna is refining this room\u2026" : source;
   return `<section class="draft-studio reveal" aria-labelledby="draft-studio-title">
     <div class="draft-studio__mark">${icon("spark")}</div>
-    <div class="draft-studio__copy"><p class="eyebrow">${escapeHtml(status)}</p><h2 id="draft-studio-title">A working analysis, not a blank worksheet.</h2><p>${escapeHtml(meta.reasoning || "Review Anna's suggestions, then correct anything that does not match your situation.")}</p>
+    <div class="draft-studio__copy"><p class="eyebrow">${escapeHtml2(status)}</p><h2 id="draft-studio-title">A working analysis, not a blank worksheet.</h2><p>${escapeHtml2(meta.reasoning || "Review Anna's suggestions, then correct anything that does not match your situation.")}</p>
       <div class="draft-facts"><span><strong>${decision.options.length}</strong> options</span><span><strong>${decision.criteria.length}</strong> criteria</span><span><strong>${decision.premortem.length || 5}</strong> premortem causes</span><span><strong>${decision.deadline ? shortDate(decision.deadline) : "Not set"}</strong> decision deadline</span></div>
-      ${meta.clarifyingQuestions?.length ? `<div class="draft-questions"><strong>Questions to tighten the draft</strong><ul>${meta.clarifyingQuestions.map((question) => `<li>${escapeHtml(question)}</li>`).join("")}</ul></div>` : ""}
+      ${meta.clarifyingQuestions?.length ? `<div class="draft-questions"><strong>Questions to tighten the draft</strong><ul>${meta.clarifyingQuestions.map((question) => `<li>${escapeHtml2(question)}</li>`).join("")}</ul></div>` : ""}
     </div><button class="button button--quiet" type="button" data-action="refine-draft" ${state.draftBusy ? "disabled" : ""}>${icon("spark")} ${meta.source === "anna" ? "Refresh with Anna" : "Refine with Anna"}</button>
   </section>`;
 }
@@ -1266,8 +1364,8 @@ function renderFrame(decision) {
     <section class="frame-layout reveal">
       <div class="paper-shell paper-shell--large"><div class="paper-core">
         <div class="section-heading"><div><p class="eyebrow">Decision statement</p><h2>The question</h2></div><span class="mode-badge">${decision.mode === "quick" ? "Quick room" : "Deep room"}</span></div>
-        <label class="field field--hero"><span>Decision</span><textarea data-decision-field="title" maxlength="140" rows="2">${escapeHtml(decision.title)}</textarea></label>
-        <label class="field"><span>Context</span><textarea data-decision-field="context" maxlength="2400" rows="5" placeholder="What changed, what is at stake, and what would a good outcome look like?">${escapeHtml(decision.context)}</textarea></label>
+        <label class="field field--hero"><span>Decision</span><textarea data-decision-field="title" maxlength="140" rows="2">${escapeHtml2(decision.title)}</textarea></label>
+        <label class="field"><span>Context</span><textarea data-decision-field="context" maxlength="2400" rows="5" placeholder="What changed, what is at stake, and what would a good outcome look like?">${escapeHtml2(decision.context)}</textarea></label>
         <label class="field field--date"><span>Decision deadline <small>Optional</small></span><input data-decision-field="deadline" type="date" value="${attr(decision.deadline)}"></label>
       </div></div>
       <aside class="frame-note"><span class="note-number">01</span><p>Write the choice so a thoughtful outsider could understand it in one reading.</p><blockquote>\u201CWhich path best serves the next twelve months?\u201D is stronger than \u201CWhat should I do?\u201D</blockquote></aside>
@@ -1276,7 +1374,7 @@ function renderFrame(decision) {
       <div class="section-heading"><div><p class="eyebrow">The field</p><h2>Options on the table.</h2></div><button class="button button--quiet" type="button" data-action="add-option" ${decision.options.length >= MAX_OPTIONS ? "disabled" : ""}>${icon("plus")} Add option</button></div>
       <div class="option-stack">${decision.options.map((option, index) => `<article class="option-editor">
         <span class="option-ordinal">${String(index + 1).padStart(2, "0")}</span>
-        <div><label class="field field--bare"><span>Option name</span><input data-option-field="name" data-option-id="${attr(option.id)}" maxlength="100" value="${attr(option.name)}"></label><label class="field field--bare"><span>Notes</span><textarea data-option-field="notes" data-option-id="${attr(option.id)}" maxlength="1800" rows="2" placeholder="What makes this option distinct?">${escapeHtml(option.notes)}</textarea></label></div>
+        <div><label class="field field--bare"><span>Option name</span><input data-option-field="name" data-option-id="${attr(option.id)}" maxlength="100" value="${attr(option.name)}"></label><label class="field field--bare"><span>Notes</span><textarea data-option-field="notes" data-option-id="${attr(option.id)}" maxlength="1800" rows="2" placeholder="What makes this option distinct?">${escapeHtml2(option.notes)}</textarea></label></div>
         <button class="icon-control" type="button" data-action="remove-option" data-id="${attr(option.id)}" aria-label="Remove ${attr(option.name)}" ${decision.options.length <= 2 ? "disabled" : ""}>${icon("trash")}</button>
       </article>`).join("")}</div>
     </section>
@@ -1296,7 +1394,7 @@ function scoreSummary(decision) {
   const scores = calculateScores(decision);
   if (!scores.length) return "";
   return `<div class="score-summary" id="score-summary">${scores.map((score, index) => `<article class="score-bar ${index === 0 ? "is-leading" : ""}">
-    <div><span>${index === 0 ? "Current lead" : `Rank ${index + 1}`}</span><h3>${escapeHtml(score.name)}</h3></div>
+    <div><span>${index === 0 ? "Current lead" : `Rank ${index + 1}`}</span><h3>${escapeHtml2(score.name)}</h3></div>
     <div class="score-meter"><span style="transform:scaleX(${score.score / 100})"></span></div>
     <strong>${score.score}<small>/100</small></strong>
   </article>`).join("")}</div>`;
@@ -1307,24 +1405,28 @@ function renderCompare(decision) {
   const insight = compareInsight(decision);
   return shell(`<div class="page page--stage">
     ${stageHeader(decision, "compare", "02 \xB7 Compare", "Make the trade-offs\nvisible.", "Score consistently, record the evidence behind each rating, and notice where a small assumption changes the leader.")}
-    <section class="compare-ai reveal" aria-labelledby="compare-ai-title"><div class="compare-ai__head"><span class="ai-spark">${icon("spark")}</span><div><p class="eyebrow">${decision.draftMeta?.source === "anna" ? "Anna analysis" : "AI first-pass analysis"}</p><h2 id="compare-ai-title">${escapeHtml(insight.headline)}</h2></div><span class="draft-chip">Editable suggestion</span></div><p>${escapeHtml(insight.summary)}</p><div class="compare-ai__signals"><div><span>Why it leads</span><strong>${escapeHtml(insight.reason)}</strong></div><div><span>Most influential</span><strong>${escapeHtml(insight.weight)}</strong></div><div><span>Stability</span><strong>${escapeHtml(insight.sensitivity)}</strong></div><div><span>Evidence</span><strong>${escapeHtml(insight.evidence)}</strong></div></div></section>
+    <section class="compare-ai reveal" aria-labelledby="compare-ai-title"><div class="compare-ai__head"><span class="ai-spark">${icon("spark")}</span><div><p class="eyebrow">${decision.draftMeta?.source === "anna" ? "Anna analysis" : "AI first-pass analysis"}</p><h2 id="compare-ai-title">${escapeHtml2(insight.headline)}</h2></div><span class="draft-chip">Editable suggestion</span></div><p>${escapeHtml2(insight.summary)}</p><div class="compare-ai__signals"><div><span>Why it leads</span><strong>${escapeHtml2(insight.reason)}</strong></div><div><span>Most influential</span><strong>${escapeHtml2(insight.weight)}</strong></div><div><span>Stability</span><strong>${escapeHtml2(insight.sensitivity)}</strong></div><div><span>User support</span><strong>${escapeHtml2(insight.evidence)}</strong></div></div></section>
     <section class="compare-lead reveal"><div><p class="eyebrow">Live ranking</p><h2>Clarity, not false precision.</h2><p>The matrix converts your inputs into a comparable 0\u2013100 view. It does not turn judgment into fact.</p></div>${scoreSummary(decision)}</section>
     <section class="matrix-section reveal">
       <div class="section-heading"><div><p class="eyebrow">Comparison matrix</p><h2>Score each fit from 1 to 5.</h2></div><div class="scale-key"><span>1 \xB7 Poor fit</span><span>3 \xB7 Mixed</span><span>5 \xB7 Strong fit</span></div></div>
-      <div class="matrix-scroll"><table class="decision-matrix"><thead><tr><th scope="col">Criterion <small>Weight</small></th>${decision.options.map((option) => `<th scope="col">${escapeHtml(option.name)}</th>`).join("")}</tr></thead><tbody>${decision.criteria.map((criterion) => `<tr><th scope="row"><strong>${escapeHtml(criterion.name)}</strong><span>${criterion.weight} weight</span></th>${decision.options.map((option) => {
+      <div class="matrix-scroll"><table class="decision-matrix"><thead><tr><th scope="col">Criterion <small>Weight</small></th>${decision.options.map((option) => `<th scope="col">${escapeHtml2(option.name)}</th>`).join("")}</tr></thead><tbody>${decision.criteria.map((criterion) => `<tr><th scope="row"><strong>${escapeHtml2(criterion.name)}</strong><span>${criterion.weight} weight</span></th>${decision.options.map((option) => {
     const rating = decision.ratings[option.id][criterion.id];
     return `<td><label class="rating-control"><span class="sr-only">${attr(option.name)} score for ${attr(criterion.name)}</span><output data-rating-value="${attr(option.id)}:${attr(criterion.id)}">${rating}</output><input type="range" min="1" max="5" step="1" value="${rating}" data-rating data-option-id="${attr(option.id)}" data-criterion-id="${attr(criterion.id)}"></label></td>`;
   }).join("")}</tr>`).join("")}</tbody></table></div>
     </section>
     <section class="sensitivity-strip reveal">
       <div class="sensitivity-mark" aria-hidden="true">\xB1</div>
-      <div><p class="eyebrow">Sensitivity check</p><h2>${sensitivity.stable ? "The ranking is stable under a practical weight test." : escapeHtml(sensitivity.summary)}</h2><p>${sensitivity.stable ? "No single criterion changed the leader when its weight moved up or down by as much as 20 points." : `If ${sensitivity.switches[0].criterion} moved ${sensitivity.switches[0].delta > 0 ? "up" : "down"} by ${Math.abs(sensitivity.switches[0].delta)} weight points, ${sensitivity.switches[0].newLeader} would lead.`}</p></div>
+      <div><p class="eyebrow">Sensitivity check</p><h2>${sensitivity.stable ? "The ranking is stable under a practical weight test." : escapeHtml2(sensitivity.summary)}</h2><p>${sensitivity.stable ? "No single criterion changed the leader when its weight moved up or down by as much as 20 points." : `If ${sensitivity.switches[0].criterion} moved ${sensitivity.switches[0].delta > 0 ? "up" : "down"} by ${Math.abs(sensitivity.switches[0].delta)} weight points, ${sensitivity.switches[0].newLeader} would lead.`}</p></div>
       <span class="stability-chip ${sensitivity.stable ? "is-stable" : ""}">${sensitivity.stable ? "Stable" : "Sensitive"}</span>
     </section>
     <section class="evidence-section reveal">
-      <div class="section-heading"><div><p class="eyebrow">Evidence notes</p><h2>Write down what the scores mean.</h2><p>Specific evidence makes the matrix useful when confidence fades later.</p></div></div>
-      <div class="evidence-columns">${decision.options.map((option) => `<article class="paper-shell"><div class="paper-core"><h3>${escapeHtml(option.name)}</h3>${decision.criteria.map((criterion) => `<label class="field field--evidence"><span>${escapeHtml(criterion.name)}</span><textarea data-evidence data-option-id="${attr(option.id)}" data-criterion-id="${attr(criterion.id)}" rows="2" maxlength="800" placeholder="Replace Anna's draft rationale with evidence">${escapeHtml(decision.evidence[option.id][criterion.id])}</textarea></label>`).join("")}</div></article>`).join("")}</div>
-      <div class="stage-continue"><p>${scores[0] ? `${escapeHtml(scores[0].name)} currently leads by ${scores[1] ? (scores[0].score - scores[1].score).toFixed(1) : "0"} points.` : "Complete the matrix to see a ranking."}</p><a class="button button--ink button--nested" href="${decisionUrl(decision, "challenge")}"><span>Challenge the result</span><i>${icon("arrow")}</i></a></div>
+      <div class="section-heading"><div><p class="eyebrow">Evidence & reasoning</p><h2>Separate facts from inference.</h2><p>Anna\u2019s score reasons begin as inferences and do not raise preparation. Edit a note after checking it to mark it user-confirmed.</p></div></div>
+      <div class="evidence-columns">${decision.options.map((option) => `<article class="paper-shell"><div class="paper-core"><h3>${escapeHtml2(option.name)}</h3>${decision.criteria.map((criterion) => {
+    const source = decision.evidenceSources?.[option.id]?.[criterion.id] || "unknown";
+    const label = source === "user" ? "User-confirmed" : source === "ai" ? decision.draftMeta?.source === "anna" ? "Anna inference" : "Starter inference" : source === "none" ? "No support yet" : "Unclassified note";
+    return `<label class="field field--evidence"><span class="evidence-label-row"><b>${escapeHtml2(criterion.name)}</b><i class="evidence-source evidence-source--${source}">${label}</i></span><textarea data-evidence data-option-id="${attr(option.id)}" data-criterion-id="${attr(criterion.id)}" rows="2" maxlength="800" placeholder="Add an observation, result, quote, or verified constraint">${escapeHtml2(decision.evidence[option.id][criterion.id])}</textarea></label>`;
+  }).join("")}</div></article>`).join("")}</div>
+      <div class="stage-continue"><p>${scores[0] ? `${escapeHtml2(scores[0].name)} currently leads by ${scores[1] ? (scores[0].score - scores[1].score).toFixed(1) : "0"} points.` : "Complete the matrix to see a ranking."}</p><a class="button button--ink button--nested" href="${decisionUrl(decision, "challenge")}"><span>Challenge the result</span><i>${icon("arrow")}</i></a></div>
     </section>
   </div>`, decision);
 }
@@ -1336,12 +1438,12 @@ function analysisCard(analysis) {
     ["Reversible experiments", analysis.experiments]
   ].filter(([, items]) => items.length);
   return `<article class="analysis-sheet reveal">
-    <header><div><span class="analysis-type">${escapeHtml(analysis.type)} \xB7 ${analysis.source === "local" ? "Local fallback" : "Anna"}</span><h2>${escapeHtml(analysis.headline)}</h2></div><time>${shortDate(analysis.createdAt)}</time></header>
-    <p class="analysis-summary">${escapeHtml(analysis.summary)}</p>
-    <div class="analysis-grid">${sections.map(([title, items]) => `<section><h3>${escapeHtml(title)}</h3><ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></section>`).join("")}</div>
-    ${analysis.premortem?.length ? `<div class="analysis-premortem"><h3>Premortem causes</h3>${analysis.premortem.map((item, index) => `<div><strong>${String(index + 1).padStart(2, "0")}. ${escapeHtml(item.cause)}</strong><span><b>Signal:</b> ${escapeHtml(item.warning)}</span><span><b>Mitigation:</b> ${escapeHtml(item.mitigation)}</span></div>`).join("")}</div>` : ""}
-    ${analysis.recommendation ? `<blockquote><span>Conditional recommendation</span><p>${escapeHtml(analysis.recommendation)}</p></blockquote>` : ""}
-    ${analysis.caveat ? `<p class="analysis-caveat"><strong>What this cannot establish:</strong> ${escapeHtml(analysis.caveat)}</p>` : ""}
+    <header><div><span class="analysis-type">${escapeHtml2(analysis.type)} \xB7 ${analysis.source === "local" ? "Local fallback" : "Anna"}</span><h2>${escapeHtml2(analysis.headline)}</h2></div><time>${shortDate(analysis.createdAt)}</time></header>
+    <p class="analysis-summary">${escapeHtml2(analysis.summary)}</p>
+    <div class="analysis-grid">${sections.map(([title, items]) => `<section><h3>${escapeHtml2(title)}</h3><ul>${items.map((item) => `<li>${escapeHtml2(item)}</li>`).join("")}</ul></section>`).join("")}</div>
+    ${analysis.premortem?.length ? `<div class="analysis-premortem"><h3>Premortem causes</h3>${analysis.premortem.map((item, index) => `<div><strong>${String(index + 1).padStart(2, "0")}. ${escapeHtml2(item.cause)}</strong><span><b>Signal:</b> ${escapeHtml2(item.warning)}</span><span><b>Mitigation:</b> ${escapeHtml2(item.mitigation)}</span></div>`).join("")}</div>` : ""}
+    ${analysis.recommendation ? `<blockquote><span>Conditional recommendation</span><p>${escapeHtml2(analysis.recommendation)}</p></blockquote>` : ""}
+    ${analysis.caveat ? `<p class="analysis-caveat"><strong>What this cannot establish:</strong> ${escapeHtml2(analysis.caveat)}</p>` : ""}
   </article>`;
 }
 function renderChallenge(decision) {
@@ -1350,24 +1452,24 @@ function renderChallenge(decision) {
   return shell(`<div class="page page--stage">
     ${stageHeader(decision, "challenge", "03 \xB7 Challenge", "Look for what the\nmatrix cannot see.", "Pressure-test the framing, assumptions, and failure modes before a tidy score becomes an excuse to stop thinking.")}
     <section class="lens-layout reveal">
-      <div class="readiness-orbit" style="--readiness:${lens.readiness}"><div><strong>${lens.readiness}</strong><span>readiness</span></div></div>
-      <div class="lens-copy"><p class="eyebrow">Decision readiness</p><h2>${escapeHtml(lens.label)}</h2><p>Readiness blends evidence coverage, score separation, assumption confidence, and recorded risk. It measures preparation\u2014not whether a choice is objectively correct.</p></div>
-      <dl class="lens-signals"><div><dt>Score gap</dt><dd>${lens.gap} pts</dd></div><div><dt>Evidence coverage</dt><dd>${lens.evidenceCoverage}%</dd></div><div><dt>Assumption confidence</dt><dd>${lens.assumptionConfidence}%</dd></div></dl>
+      <div class="readiness-orbit" style="--readiness:${lens.readiness}"><div><strong>${lens.readiness}</strong><span>preparation</span></div></div>
+      <div class="lens-copy"><p class="eyebrow">Decision preparation</p><h2>${escapeHtml2(lens.label)}</h2><p>This is a process-completeness signal\u2014not confidence and not a verdict. It counts only user-confirmed evidence, then combines assumption confidence, score separation, and risk planning.</p><small class="lens-formula">45% user evidence \xB7 30% assumptions \xB7 15% separation \xB7 10% risk planning</small></div>
+      <dl class="lens-signals"><div><dt>User-confirmed evidence</dt><dd>${lens.evidenceCoverage}%</dd></div><div><dt>Assumption confidence</dt><dd>${lens.assumptionConfidence}%</dd></div><div><dt>Score separation</dt><dd>${lens.scoreSeparation}%</dd></div><div><dt>Risk planning</dt><dd>${lens.riskPreparedness}%</dd></div></dl>
     </section>
     <section class="register-layout reveal">
       <div class="register-column"><div class="section-heading"><div><p class="eyebrow">Assumptions</p><h2>What must be true?</h2></div><button class="button button--quiet" type="button" data-action="add-assumption">${icon("plus")} Add</button></div>
         <div class="register-list">${decision.assumptions.length ? decision.assumptions.map((item, index) => `<article class="register-item"><span>${String(index + 1).padStart(2, "0")}</span><div><label class="field field--bare"><span>Assumption</span><input data-assumption-field="text" data-id="${attr(item.id)}" maxlength="500" value="${attr(item.text)}"></label><label class="compact-range"><span>Confidence</span><input type="range" min="1" max="5" value="${item.confidence}" data-assumption-field="confidence" data-id="${attr(item.id)}"><output>${item.confidence}/5</output></label></div><button class="icon-control" type="button" data-action="remove-assumption" data-id="${attr(item.id)}" aria-label="Remove assumption">${icon("trash")}</button></article>`).join("") : `<p class="register-empty">No assumptions recorded yet. Add the belief that would hurt most if it proved false.</p>`}</div>
       </div>
       <div class="register-column"><div class="section-heading"><div><p class="eyebrow">Risks</p><h2>What could derail it?</h2></div><button class="button button--quiet" type="button" data-action="add-risk">${icon("plus")} Add</button></div>
-        <div class="register-list">${decision.risks.length ? decision.risks.map((item, index) => `<article class="register-item"><span>R${index + 1}</span><div><label class="field field--bare"><span>Risk</span><input data-risk-field="text" data-id="${attr(item.id)}" maxlength="500" value="${attr(item.text)}"></label><div class="risk-row"><label><span>For</span><select data-risk-field="optionId" data-id="${attr(item.id)}">${decision.options.map((option) => `<option value="${attr(option.id)}" ${option.id === item.optionId ? "selected" : ""}>${escapeHtml(option.name)}</option>`).join("")}</select></label><label><span>Likelihood</span><input type="number" min="1" max="5" data-risk-field="likelihood" data-id="${attr(item.id)}" value="${item.likelihood}"></label><label><span>Impact</span><input type="number" min="1" max="5" data-risk-field="impact" data-id="${attr(item.id)}" value="${item.impact}"></label></div></div><button class="icon-control" type="button" data-action="remove-risk" data-id="${attr(item.id)}" aria-label="Remove risk">${icon("trash")}</button></article>`).join("") : `<p class="register-empty">No risks recorded yet. Start with the most plausible way the leading option disappoints.</p>`}</div>
+        <div class="register-list">${decision.risks.length ? decision.risks.map((item, index) => `<article class="register-item"><span>R${index + 1}</span><div><label class="field field--bare"><span>Risk</span><input data-risk-field="text" data-id="${attr(item.id)}" maxlength="500" value="${attr(item.text)}"></label><div class="risk-row"><label><span>For</span><select data-risk-field="optionId" data-id="${attr(item.id)}">${decision.options.map((option) => `<option value="${attr(option.id)}" ${option.id === item.optionId ? "selected" : ""}>${escapeHtml2(option.name)}</option>`).join("")}</select></label><label><span>Likelihood</span><input type="number" min="1" max="5" data-risk-field="likelihood" data-id="${attr(item.id)}" value="${item.likelihood}"></label><label><span>Impact</span><input type="number" min="1" max="5" data-risk-field="impact" data-id="${attr(item.id)}" value="${item.impact}"></label></div></div><button class="icon-control" type="button" data-action="remove-risk" data-id="${attr(item.id)}" aria-label="Remove risk">${icon("trash")}</button></article>`).join("") : `<p class="register-empty">No risks recorded yet. Start with the most plausible way the leading option disappoints.</p>`}</div>
       </div>
     </section>
-    <section class="premortem-panel reveal" aria-labelledby="premortem-title"><div class="section-heading"><div><p class="eyebrow">AI premortem</p><h2 id="premortem-title">If this decision fails, we want to see it early.</h2><p>Five preventable failure modes, with a signal to watch and a mitigation to test. Edit the assumptions above as your context improves.</p></div><span class="analysis-count">${decision.premortem.length || 0} / 5 causes</span></div><div class="premortem-list">${decision.premortem.length ? decision.premortem.map((item, index) => `<article class="premortem-item"><span class="premortem-number">${String(index + 1).padStart(2, "0")}</span><div><h3>${escapeHtml(item.cause)}</h3><dl><div><dt>Early signal</dt><dd>${escapeHtml(item.warning || "Watch for evidence that this assumption is weakening.")}</dd></div><div><dt>Mitigation</dt><dd>${escapeHtml(item.mitigation || "Define a small test before committing.")}</dd></div></dl></div></article>`).join("") : `<p class="register-empty">Run the premortem lens to generate five failure causes, warning signals, and mitigations.</p>`}</div></section>
+    <section class="premortem-panel reveal" aria-labelledby="premortem-title"><div class="section-heading"><div><p class="eyebrow">AI premortem</p><h2 id="premortem-title">If this decision fails, we want to see it early.</h2><p>Five preventable failure modes, with a signal to watch and a mitigation to test. Edit the assumptions above as your context improves.</p></div><span class="analysis-count">${decision.premortem.length || 0} / 5 causes</span></div><div class="premortem-list">${decision.premortem.length ? decision.premortem.map((item, index) => `<article class="premortem-item"><span class="premortem-number">${String(index + 1).padStart(2, "0")}</span><div><h3>${escapeHtml2(item.cause)}</h3><dl><div><dt>Early signal</dt><dd>${escapeHtml2(item.warning || "Watch for evidence that this assumption is weakening.")}</dd></div><div><dt>Mitigation</dt><dd>${escapeHtml2(item.mitigation || "Define a small test before committing.")}</dd></div></dl></div></article>`).join("") : `<p class="register-empty">Run the premortem lens to generate five failure causes, warning signals, and mitigations.</p>`}</div></section>
     <section class="ai-studio reveal">
       <div class="ai-studio__intro"><p class="eyebrow">Anna thinking studio</p><h2>Invite a useful disagreement.</h2><p>Choose a lens. Anna receives only this decision\u2019s current context and returns a structured advisory note. It cannot alter your scores or commit for you.</p></div>
       <div class="analysis-actions">${[["challenger", "Challenge my thinking", "Find bias, missing options, and weak evidence."], ["premortem", "Run a premortem", "Imagine failure and expose preventable causes."], ["scenarios", "Explore scenarios", "Map best, expected, and difficult futures."], ["advisor", "Synthesize next steps", "Turn uncertainty into reversible experiments."]].map(([type, title, text]) => `<button class="analysis-action" type="button" data-action="run-analysis" data-type="${type}" ${state.aiBusy ? "disabled" : ""}><span>${icon("spark")}</span><strong>${title}</strong><small>${text}</small>${icon("arrow")}</button>`).join("")}</div>
     </section>
-    ${latest ? `<section class="latest-analysis"><div class="section-heading"><div><p class="eyebrow">Latest analysis</p><h2>A second perspective.</h2></div>${decision.analyses.length > 1 ? `<span class="analysis-count">${decision.analyses.length} saved analyses</span>` : ""}</div>${analysisCard(latest)}</section>` : `<section class="analysis-empty reveal"><span>${icon("spark")}</span><div><h2>No AI analysis yet.</h2><p>Your deterministic readiness lens is already active. Run an Anna lens when you want a structured second opinion.</p></div></section>`}
+    ${latest ? `<section class="latest-analysis"><div class="section-heading"><div><p class="eyebrow">Latest analysis</p><h2>A second perspective.</h2></div>${decision.analyses.length > 1 ? `<span class="analysis-count">${decision.analyses.length} saved analyses</span>` : ""}</div>${analysisCard(latest)}</section>` : `<section class="analysis-empty reveal"><span>${icon("spark")}</span><div><h2>No AI analysis yet.</h2><p>Your deterministic preparation lens is already active. Run an Anna lens when you want a structured second opinion.</p></div></section>`}
     <div class="stage-continue reveal"><p>You still own the decision. Ask the Coach about any tension, or move directly to commitment.</p><div class="button-row"><a class="button button--quiet" href="${decisionUrl(decision, "coach")}">${icon("spark")} Ask the Coach</a><a class="button button--ink button--nested" href="${decisionUrl(decision, "commit")}"><span>Move to commitment</span><i>${icon("arrow")}</i></a></div></div>
   </div>`, decision);
 }
@@ -1386,11 +1488,11 @@ function renderCoach(decision) {
   return shell(`<div class="page page--stage page--coach">
     ${stageHeader(decision, "coach", "04 \xB7 Coach", "Think it through\nwith a sharp partner.", "Ask about this decision in plain language. The Coach stays grounded in your room and keeps judgment in your hands.")}
     <section class="coach-layout reveal">
-      <aside class="coach-context"><div class="coach-avatar">${icon("spark")}</div><p class="eyebrow">Decision Coach</p><h2>Grounded in this room.</h2><p>I can question the framing, unpack a trade-off, or turn uncertainty into a small next step. I won\u2019t invent research or choose for you.</p><dl><div><dt>Current leader</dt><dd>${escapeHtml(lens.leader?.name || "Not scored")}</dd></div><div><dt>Readiness</dt><dd>${lens.readiness}/100</dd></div><div><dt>Saved context</dt><dd>${decision.options.length} options \xB7 ${decision.criteria.length} criteria</dd></div></dl><button class="text-link" type="button" data-action="clear-coach" ${messages.length ? "" : "disabled"}>Clear conversation</button></aside>
+      <aside class="coach-context"><div class="coach-avatar">${icon("spark")}</div><p class="eyebrow">Decision Coach</p><h2>Grounded in this room.</h2><p>I can question the framing, unpack a trade-off, or turn uncertainty into a small next step. I won\u2019t invent research or choose for you.</p><dl><div><dt>Current leader</dt><dd>${escapeHtml2(lens.leader?.name || "Not scored")}</dd></div><div><dt>Preparation</dt><dd>${lens.readiness}/100</dd></div><div><dt>Saved context</dt><dd>${decision.options.length} options \xB7 ${decision.criteria.length} criteria</dd></div></dl><button class="text-link" type="button" data-action="clear-coach" ${messages.length ? "" : "disabled"}>Clear conversation</button></aside>
       <div class="chat-shell"><div class="chat-core">
         <header class="chat-head"><div><span class="presence-dot"></span><strong>Decision Coach</strong><small>${state.platform.connected ? "Powered by Anna" : "Anna required for replies"}</small></div><a class="button button--quiet" href="${decisionUrl(decision, "challenge")}">Open challenge tools</a></header>
-        <div class="chat-log" id="chat-log" aria-live="polite">${messages.length ? messages.map((message) => `<article class="chat-message chat-message--${message.role}"><div class="message-avatar">${message.role === "assistant" ? icon("spark") : "You"}</div><div><header><strong>${message.role === "assistant" ? "Coach" : "You"}</strong>${message.role === "assistant" && message.source === "local" ? "<span>Local fallback</span>" : ""}<time>${coachTime(message.createdAt)}</time></header><p>${escapeHtml(message.text).replaceAll("\n", "<br>")}</p></div></article>`).join("") : `<div class="chat-welcome"><span>${icon("challenge")}</span><h2>Bring me the part that still feels unresolved.</h2><p>The best question is often narrower than the decision itself.</p><div class="starter-grid">${starters.map((question) => `<button type="button" data-action="coach-starter" data-question="${attr(question)}">${escapeHtml(question)}${icon("arrow")}</button>`).join("")}</div></div>`}${state.coachBusy ? `<article class="chat-message chat-message--assistant is-pending"><div class="message-avatar">${icon("spark")}</div><div><header><strong>Coach</strong><span>Reading the room</span></header><div class="typing-dots" aria-label="Coach is thinking"><i></i><i></i><i></i></div></div></article>` : ""}</div>
-        <form id="coach-form" class="chat-composer"><label><span class="sr-only">Message the Decision Coach</span><textarea name="question" id="coach-input" rows="1" maxlength="1200" placeholder="Ask about a trade-off, assumption, or next step\u2026" ${state.coachBusy ? "disabled" : ""}>${escapeHtml(state.coachDraft)}</textarea></label><div><span id="coach-count">${state.coachDraft.length}/1200</span><small><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to send</small><button class="button button--accent button--nested" type="submit" ${state.coachBusy ? "disabled" : ""}><span>Send</span><i>${icon("arrow")}</i></button></div></form>
+        <div class="chat-log" id="chat-log" aria-live="polite">${messages.length ? messages.map((message) => `<article class="chat-message chat-message--${message.role}"><div class="message-avatar">${message.role === "assistant" ? icon("spark") : "You"}</div><div><header><strong>${message.role === "assistant" ? "Coach" : "You"}</strong>${message.role === "assistant" && message.source === "local" ? "<span>Local fallback</span>" : ""}<time>${coachTime(message.createdAt)}</time></header><div class="message-markdown">${renderSafeMarkdown(message.text)}</div></div></article>`).join("") : `<div class="chat-welcome"><span>${icon("challenge")}</span><h2>Bring me the part that still feels unresolved.</h2><p>The best question is often narrower than the decision itself.</p><div class="starter-grid">${starters.map((question) => `<button type="button" data-action="coach-starter" data-question="${attr(question)}">${escapeHtml2(question)}${icon("arrow")}</button>`).join("")}</div></div>`}${state.coachBusy ? `<article class="chat-message chat-message--assistant is-pending"><div class="message-avatar">${icon("spark")}</div><div><header><strong>Coach</strong><span>Reading the room</span></header><div class="typing-dots" aria-label="Coach is thinking"><i></i><i></i><i></i></div></div></article>` : ""}</div>
+        <form id="coach-form" class="chat-composer"><label><span class="sr-only">Message the Decision Coach</span><textarea name="question" id="coach-input" rows="1" maxlength="1200" placeholder="Ask about a trade-off, assumption, or next step\u2026" ${state.coachBusy ? "disabled" : ""}>${escapeHtml2(state.coachDraft)}</textarea></label><div><span id="coach-count">${state.coachDraft.length}/1200</span><small><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to send</small><button class="button button--accent button--nested" type="submit" ${state.coachBusy ? "disabled" : ""}><span>Send</span><i>${icon("arrow")}</i></button></div></form>
       </div></div>
     </section>
   </div>`, decision);
@@ -1404,18 +1506,18 @@ function renderCommit(decision) {
   return shell(`<div class="page page--stage">
     ${stageHeader(decision, "commit", "04 \xB7 Commit", "Choose deliberately.\nLeave a trail.", "Record the choice, confidence, and first action. A clear rationale is insurance against hindsight bias.")}
     <section class="commit-layout reveal">
-      <aside class="recommendation-panel"><p class="eyebrow">What the matrix says</p><span class="recommendation-score">${leader?.score ?? "\u2014"}<small>/100</small></span><h2>${escapeHtml(leader?.name || "No leader yet")}</h2><p>${leader ? `Currently leads the weighted comparison${scores[1] ? ` by ${(leader.score - scores[1].score).toFixed(1)} points` : ""}.` : "Complete the comparison matrix first."}</p><div class="principle-note"><strong>Remember</strong><p>A score is a summary of your assumptions. It is not permission to ignore your judgment.</p></div></aside>
+      <aside class="recommendation-panel"><p class="eyebrow">What the matrix says</p><span class="recommendation-score">${leader?.score ?? "\u2014"}<small>/100</small></span><h2>${escapeHtml2(leader?.name || "No leader yet")}</h2><p>${leader ? `Currently leads the weighted comparison${scores[1] ? ` by ${(leader.score - scores[1].score).toFixed(1)} points` : ""}.` : "Complete the comparison matrix first."}</p><div class="principle-note"><strong>Remember</strong><p>A score is a summary of your assumptions. It is not permission to ignore your judgment.</p></div></aside>
       <form id="commit-form" class="paper-shell paper-shell--large"><div class="paper-core">
         <p class="eyebrow">Your commitment</p><h2>${commitment ? "Update the decision record." : suggestion ? "Review Anna's recommendation." : "What will you do?"}</h2>
         ${suggestion ? `<div class="commit-draft-note"><span>${icon("spark")}</span><p><strong>Anna drafted this from your room.</strong> Confirm or edit every field before recording a commitment. It is advisory, not a decision.</p></div>` : ""}
-        <label class="field"><span>Chosen option</span><select name="optionId" required><option value="">Select one</option>${decision.options.map((option) => `<option value="${attr(option.id)}" ${draft?.optionId === option.id ? "selected" : ""}>${escapeHtml(option.name)}</option>`).join("")}</select></label>
-        <label class="field"><span>Why this option?</span><textarea name="rationale" rows="5" maxlength="1800" required placeholder="Name the evidence, trade-offs, and uncertainty you are accepting.">${escapeHtml(draft?.rationale || "")}</textarea></label>
+        <label class="field"><span>Chosen option</span><select name="optionId" required><option value="">Select one</option>${decision.options.map((option) => `<option value="${attr(option.id)}" ${draft?.optionId === option.id ? "selected" : ""}>${escapeHtml2(option.name)}</option>`).join("")}</select></label>
+        <label class="field"><span>Why this option?</span><textarea name="rationale" rows="5" maxlength="1800" required placeholder="Name the evidence, trade-offs, and uncertainty you are accepting.">${escapeHtml2(draft?.rationale || "")}</textarea></label>
         <label class="field"><span>First concrete action</span><input name="nextAction" maxlength="500" required value="${attr(draft?.nextAction || "")}" placeholder="The next observable step"></label>
         <div class="form-split"><label class="field"><span>Confidence</span><select name="confidence"><option value="1" ${draft?.confidence === 1 ? "selected" : ""}>1 \xB7 Very uncertain</option><option value="2" ${draft?.confidence === 2 ? "selected" : ""}>2 \xB7 Cautious</option><option value="3" ${!draft || draft.confidence === 3 ? "selected" : ""}>3 \xB7 Balanced</option><option value="4" ${draft?.confidence === 4 ? "selected" : ""}>4 \xB7 Confident</option><option value="5" ${draft?.confidence === 5 ? "selected" : ""}>5 \xB7 Very confident</option></select></label><label class="field"><span>Review date</span><input type="date" name="reviewDate" required value="${attr(commitment?.reviewDate || defaultReviewDate())}"></label></div>
         <div class="form-submit"><p>You can revise this record until you complete the outcome review.</p><button class="button button--accent button--nested" type="submit"><span>${commitment ? "Update commitment" : "Record my decision"}</span><i>${icon("commit")}</i></button></div>
       </div></form>
     </section>
-    ${commitment ? `<section class="commitment-receipt reveal"><span class="receipt-mark">\u2713</span><div><p class="eyebrow">Committed ${shortDate(commitment.decidedAt)}</p><h2>${escapeHtml(decision.options.find((option) => option.id === commitment.optionId)?.name || "Chosen option")}</h2><p>${escapeHtml(commitment.rationale)}</p></div><a class="button button--quiet" href="${decisionUrl(decision, "report")}">${icon("print")} Open decision brief</a></section>` : ""}
+    ${commitment ? `<section class="commitment-receipt reveal"><span class="receipt-mark">\u2713</span><div><p class="eyebrow">Committed ${shortDate(commitment.decidedAt)}</p><h2>${escapeHtml2(decision.options.find((option) => option.id === commitment.optionId)?.name || "Chosen option")}</h2><p>${escapeHtml2(commitment.rationale)}</p></div><a class="button button--quiet" href="${decisionUrl(decision, "report")}">${icon("print")} Open decision brief</a></section>` : ""}
   </div>`, decision);
 }
 function defaultReviewDate() {
@@ -1433,10 +1535,10 @@ function renderReview(decision) {
     ${stageHeader(decision, "review", "05 \xB7 Review", "Close the loop.\nKeep the lesson.", "Separate decision quality from outcome luck, then carry the useful lesson into your next choice.")}
     <section class="review-timeline reveal"><div><span>Decided</span><strong>${shortDate(commitment.decidedAt)}</strong></div><i></i><div><span>Review planned</span><strong>${shortDate(commitment.reviewDate)}</strong><small>${relativeDate(commitment.reviewDate)}</small></div><i></i><div class="${decision.outcome ? "is-complete" : ""}"><span>Outcome</span><strong>${decision.outcome ? "Recorded" : "Open"}</strong></div></section>
     <section class="review-layout reveal">
-      <aside class="decision-memory"><p class="eyebrow">The record</p><h2>${escapeHtml(chosen?.name || "Chosen option")}</h2><blockquote>${escapeHtml(commitment.rationale)}</blockquote><dl><div><dt>Confidence then</dt><dd>${commitment.confidence}/5</dd></div><div><dt>First action</dt><dd>${escapeHtml(commitment.nextAction)}</dd></div></dl></aside>
-      <form id="outcome-form" class="paper-shell paper-shell--large"><div class="paper-core"><p class="eyebrow">Outcome review</p><h2>What actually happened?</h2><label class="field"><span>Describe the outcome</span><textarea name="result" rows="5" maxlength="1800" required placeholder="What changed after the decision?">${escapeHtml(decision.outcome?.result || "")}</textarea></label><label class="field"><span>What should future-you remember?</span><textarea name="lesson" rows="4" maxlength="1400" required placeholder="A principle, warning, or repeatable move">${escapeHtml(decision.outcome?.lesson || "")}</textarea></label><fieldset class="outcome-score"><legend>Outcome quality</legend>${[1, 2, 3, 4, 5].map((score) => `<label><input type="radio" name="score" value="${score}" ${Number(decision.outcome?.score || 3) === score ? "checked" : ""}><span>${score}</span><small>${["Poor", "Weak", "Mixed", "Good", "Strong"][score - 1]}</small></label>`).join("")}</fieldset><div class="form-submit"><p>A difficult outcome does not always mean the decision process was poor.</p><button class="button button--accent button--nested" type="submit"><span>${decision.outcome ? "Update review" : "Complete the loop"}</span><i>${icon("review")}</i></button></div></div></form>
+      <aside class="decision-memory"><p class="eyebrow">The record</p><h2>${escapeHtml2(chosen?.name || "Chosen option")}</h2><blockquote>${escapeHtml2(commitment.rationale)}</blockquote><dl><div><dt>Confidence then</dt><dd>${commitment.confidence}/5</dd></div><div><dt>First action</dt><dd>${escapeHtml2(commitment.nextAction)}</dd></div></dl></aside>
+      <form id="outcome-form" class="paper-shell paper-shell--large"><div class="paper-core"><p class="eyebrow">Outcome review</p><h2>What actually happened?</h2><label class="field"><span>Describe the outcome</span><textarea name="result" rows="5" maxlength="1800" required placeholder="What changed after the decision?">${escapeHtml2(decision.outcome?.result || "")}</textarea></label><label class="field"><span>What should future-you remember?</span><textarea name="lesson" rows="4" maxlength="1400" required placeholder="A principle, warning, or repeatable move">${escapeHtml2(decision.outcome?.lesson || "")}</textarea></label><fieldset class="outcome-score"><legend>Outcome quality</legend>${[1, 2, 3, 4, 5].map((score) => `<label><input type="radio" name="score" value="${score}" ${Number(decision.outcome?.score || 3) === score ? "checked" : ""}><span>${score}</span><small>${["Poor", "Weak", "Mixed", "Good", "Strong"][score - 1]}</small></label>`).join("")}</fieldset><div class="form-submit"><p>A difficult outcome does not always mean the decision process was poor.</p><button class="button button--accent button--nested" type="submit"><span>${decision.outcome ? "Update review" : "Complete the loop"}</span><i>${icon("review")}</i></button></div></div></form>
     </section>
-    ${decision.outcome ? `<section class="lesson-banner reveal"><p class="eyebrow">Lesson retained</p><h2>${escapeHtml(decision.outcome.lesson)}</h2><a class="button button--quiet" href="${decisionUrl(decision, "report")}">${icon("print")} View full brief</a></section>` : ""}
+    ${decision.outcome ? `<section class="lesson-banner reveal"><p class="eyebrow">Lesson retained</p><h2>${escapeHtml2(decision.outcome.lesson)}</h2><a class="button button--quiet" href="${decisionUrl(decision, "report")}">${icon("print")} View full brief</a></section>` : ""}
   </div>`, decision);
 }
 function renderReport(decision) {
@@ -1444,12 +1546,12 @@ function renderReport(decision) {
   const lens = confidenceLens(decision);
   const chosen = decision.commitment ? decision.options.find((option) => option.id === decision.commitment.optionId) : null;
   return shell(`<div class="page page--report"><header class="report-toolbar"><a class="text-link" href="${decisionUrl(decision, "commit")}">${icon("arrow", "icon--back")} Back to room</a><div><button class="button button--quiet" type="button" data-action="export-decision">${icon("download")} Export JSON</button><button class="button button--ink" type="button" data-action="print">${icon("print")} Print brief</button></div></header>
-    <article class="decision-brief" id="decision-brief"><header><div>${logoMarkup()}<p>Decision Room / Brief</p></div><time>${shortDate(decision.updatedAt)}</time><h1>${escapeHtml(decision.title)}</h1><p>${escapeHtml(decision.context || "No additional context recorded.")}</p></header>
-      <section class="brief-verdict"><span>Recorded choice</span><h2>${escapeHtml(chosen?.name || "Not committed yet")}</h2><strong>${decision.commitment ? `${decision.commitment.confidence}/5 confidence` : `${lens.readiness}/100 readiness`}</strong></section>
-      <section><p class="eyebrow">Comparison</p><h2>Weighted result</h2><div class="brief-scores">${scores.map((score, index) => `<div><span>${index + 1}</span><strong>${escapeHtml(score.name)}</strong><i><b style="transform:scaleX(${score.score / 100})"></b></i><em>${score.score}</em></div>`).join("")}</div></section>
-      <section class="brief-columns"><div><p class="eyebrow">Assumptions</p><ul>${decision.assumptions.length ? decision.assumptions.map((item) => `<li>${escapeHtml(item.text)} <small>${item.confidence}/5 confidence</small></li>`).join("") : "<li>None recorded.</li>"}</ul></div><div><p class="eyebrow">Risks</p><ul>${decision.risks.length ? decision.risks.map((item) => `<li>${escapeHtml(item.text)} <small>${item.likelihood}\xD7${item.impact} exposure</small></li>`).join("") : "<li>None recorded.</li>"}</ul></div></section>
-      ${decision.commitment ? `<section><p class="eyebrow">Commitment</p><blockquote>${escapeHtml(decision.commitment.rationale)}</blockquote><dl class="brief-details"><div><dt>Next action</dt><dd>${escapeHtml(decision.commitment.nextAction)}</dd></div><div><dt>Review date</dt><dd>${shortDate(decision.commitment.reviewDate)}</dd></div></dl></section>` : ""}
-      ${decision.outcome ? `<section class="brief-outcome"><p class="eyebrow">Outcome & lesson</p><h2>${escapeHtml(decision.outcome.lesson)}</h2><p>${escapeHtml(decision.outcome.result)}</p><strong>${decision.outcome.score}/5 outcome quality</strong></section>` : ""}
+    <article class="decision-brief" id="decision-brief"><header><div>${logoMarkup()}<p>Decision Room / Brief</p></div><time>${shortDate(decision.updatedAt)}</time><h1>${escapeHtml2(decision.title)}</h1><p>${escapeHtml2(decision.context || "No additional context recorded.")}</p></header>
+      <section class="brief-verdict"><span>Recorded choice</span><h2>${escapeHtml2(chosen?.name || "Not committed yet")}</h2><strong>${decision.commitment ? `${decision.commitment.confidence}/5 confidence` : `${lens.readiness}/100 preparation`}</strong></section>
+      <section><p class="eyebrow">Comparison</p><h2>Weighted result</h2><div class="brief-scores">${scores.map((score, index) => `<div><span>${index + 1}</span><strong>${escapeHtml2(score.name)}</strong><i><b style="transform:scaleX(${score.score / 100})"></b></i><em>${score.score}</em></div>`).join("")}</div></section>
+      <section class="brief-columns"><div><p class="eyebrow">Assumptions</p><ul>${decision.assumptions.length ? decision.assumptions.map((item) => `<li>${escapeHtml2(item.text)} <small>${item.confidence}/5 confidence</small></li>`).join("") : "<li>None recorded.</li>"}</ul></div><div><p class="eyebrow">Risks</p><ul>${decision.risks.length ? decision.risks.map((item) => `<li>${escapeHtml2(item.text)} <small>${item.likelihood}\xD7${item.impact} exposure</small></li>`).join("") : "<li>None recorded.</li>"}</ul></div></section>
+      ${decision.commitment ? `<section><p class="eyebrow">Commitment</p><blockquote>${escapeHtml2(decision.commitment.rationale)}</blockquote><dl class="brief-details"><div><dt>Next action</dt><dd>${escapeHtml2(decision.commitment.nextAction)}</dd></div><div><dt>Review date</dt><dd>${shortDate(decision.commitment.reviewDate)}</dd></div></dl></section>` : ""}
+      ${decision.outcome ? `<section class="brief-outcome"><p class="eyebrow">Outcome & lesson</p><h2>${escapeHtml2(decision.outcome.lesson)}</h2><p>${escapeHtml2(decision.outcome.result)}</p><strong>${decision.outcome.score}/5 outcome quality</strong></section>` : ""}
       <footer>Scores summarize user-supplied judgments. AI notes are advisory and do not constitute external research.</footer>
     </article>
   </div>`, decision);
@@ -1496,9 +1598,11 @@ function addOption(decision) {
   decision.options.push(option);
   decision.ratings[option.id] = {};
   decision.evidence[option.id] = {};
+  decision.evidenceSources[option.id] = {};
   for (const criterion of decision.criteria) {
     decision.ratings[option.id][criterion.id] = 3;
     decision.evidence[option.id][criterion.id] = "";
+    decision.evidenceSources[option.id][criterion.id] = "none";
   }
   touch(decision);
   render();
@@ -1508,6 +1612,7 @@ function removeOption(decision, id) {
   decision.options = decision.options.filter((option) => option.id !== id);
   delete decision.ratings[id];
   delete decision.evidence[id];
+  delete decision.evidenceSources[id];
   decision.risks = decision.risks.filter((risk) => risk.optionId !== id);
   if (decision.commitment?.optionId === id) {
     decision.commitment = null;
@@ -1528,6 +1633,7 @@ function addCriterion(decision) {
   for (const option of decision.options) {
     decision.ratings[option.id][criterion.id] = 3;
     decision.evidence[option.id][criterion.id] = "";
+    decision.evidenceSources[option.id][criterion.id] = "none";
   }
   touch(decision);
   render();
@@ -1538,6 +1644,7 @@ function removeCriterion(decision, id) {
   for (const option of decision.options) {
     delete decision.ratings[option.id][id];
     delete decision.evidence[option.id][id];
+    delete decision.evidenceSources[option.id][id];
   }
   touch(decision);
   render();
@@ -1550,14 +1657,30 @@ async function refineDecisionDraft(decision, { automatic = false } = {}) {
   decision.draftMeta = { ...decision.draftMeta || {}, status: "refining", generatedAt };
   if (activeDecision()?.id === decision.id) render();
   try {
-    const text = await state.platform.complete({
-      messages: [{ role: "user", content: { type: "text", text: buildDecisionDraftPrompt(decision, /* @__PURE__ */ new Date()) } }],
-      systemPrompt: "You are Decision Room's first-pass decision architect. Think silently, then follow the user's compact JSON schema exactly. Keep the visible response under 1200 tokens, use short strings, never invent external facts, and never make the final decision. Return minified JSON only.",
-      maxTokens: 4096,
-      temperature: 0.2
-    });
-    const parsed = parseStructuredJson(text);
-    if (!isDecisionDraftPayload(parsed)) throw new Error("Anna returned an incomplete first draft.");
+    const prompt = buildDecisionDraftPrompt(decision, /* @__PURE__ */ new Date());
+    let parsed = null;
+    let issues = ["no response received"];
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const repair = attempt ? `
+
+QUALITY REPAIR REQUIRED: ${issues.join("; ")}. Rewrite the complete JSON from the beginning. Ground every option, criterion, score reason, risk, and test in the user's stated decision; never use placeholder language.` : "";
+      const text = await state.platform.complete({
+        messages: [{ role: "user", content: { type: "text", text: `${prompt}${repair}` } }],
+        systemPrompt: "You are Decision Room's first-pass decision architect. Think silently, then follow the compact JSON schema exactly. Use the user's specific constraints in every section. Never use placeholder or 'verify how X fits Y' language. Never invent external facts or make the final decision. Return one complete minified JSON object only.",
+        maxTokens: 4096,
+        temperature: attempt ? 0.1 : 0.2
+      });
+      try {
+        parsed = parseStructuredJson(text);
+        issues = decisionDraftQualityIssues(parsed, decision);
+      } catch {
+        parsed = null;
+        issues = ["malformed or truncated JSON"];
+      }
+      if (parsed && issues.length === 0) break;
+      parsed = null;
+    }
+    if (!parsed) throw new Error(`Anna returned a low-quality first draft: ${issues.join("; ")}`);
     if (automatic && decision.updatedAt !== baseline) {
       decision.draftMeta.status = decision.draftMeta.source === "anna" ? "ready" : "fallback";
       return;
@@ -1681,7 +1804,7 @@ function downloadJson(filename, value) {
 }
 function openDecisionMenu(decision) {
   modalRoot.hidden = false;
-  modalRoot.innerHTML = `<div class="modal-backdrop" data-action="close-modal"></div><section class="action-sheet" role="dialog" aria-modal="true" aria-labelledby="actions-title"><div class="action-sheet__head"><div><p class="eyebrow">Decision actions</p><h2 id="actions-title">${escapeHtml(decision.title)}</h2></div><button class="icon-control" type="button" data-action="close-modal" aria-label="Close">${icon("close")}</button></div><div class="action-list"><a href="${decisionUrl(decision, "report")}">${icon("print")}<span><strong>Open decision brief</strong><small>See the complete printable record.</small></span></a><button type="button" data-action="duplicate-decision" data-id="${attr(decision.id)}">${icon("copy")}<span><strong>Duplicate room</strong><small>Reuse the structure for a fresh decision.</small></span></button><button type="button" data-action="export-decision" data-id="${attr(decision.id)}">${icon("download")}<span><strong>Export JSON</strong><small>Keep a portable copy of this room.</small></span></button><button class="danger-action" type="button" data-action="delete-decision" data-id="${attr(decision.id)}">${icon("trash")}<span><strong>Delete decision</strong><small>This cannot be undone.</small></span></button></div></section>`;
+  modalRoot.innerHTML = `<div class="modal-backdrop" data-action="close-modal"></div><section class="action-sheet" role="dialog" aria-modal="true" aria-labelledby="actions-title"><div class="action-sheet__head"><div><p class="eyebrow">Decision actions</p><h2 id="actions-title">${escapeHtml2(decision.title)}</h2></div><button class="icon-control" type="button" data-action="close-modal" aria-label="Close">${icon("close")}</button></div><div class="action-list"><a href="${decisionUrl(decision, "report")}">${icon("print")}<span><strong>Open decision brief</strong><small>See the complete printable record.</small></span></a><button type="button" data-action="duplicate-decision" data-id="${attr(decision.id)}">${icon("copy")}<span><strong>Duplicate room</strong><small>Reuse the structure for a fresh decision.</small></span></button><button type="button" data-action="export-decision" data-id="${attr(decision.id)}">${icon("download")}<span><strong>Export JSON</strong><small>Keep a portable copy of this room.</small></span></button><button class="danger-action" type="button" data-action="delete-decision" data-id="${attr(decision.id)}">${icon("trash")}<span><strong>Delete decision</strong><small>This cannot be undone.</small></span></button></div></section>`;
 }
 app.addEventListener("submit", async (event) => {
   const form = event.target;
@@ -1808,6 +1931,7 @@ app.addEventListener("input", (event) => {
   }
   if (target.hasAttribute("data-evidence")) {
     decision.evidence[target.dataset.optionId][target.dataset.criterionId] = target.value.slice(0, 800);
+    decision.evidenceSources[target.dataset.optionId][target.dataset.criterionId] = target.value.trim() ? "user" : "none";
     touch(decision);
   }
   const assumptionField = target.dataset.assumptionField;

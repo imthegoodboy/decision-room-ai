@@ -52,6 +52,7 @@ test("complete frame-to-outcome workflow works inside the Anna harness", async (
   await frame.getByRole("button", { name: /What assumption should I test first/ }).click();
   await frame.getByRole("button", { name: "Send" }).click();
   await expect(frame.getByText(/current ranking is directionally useful/i)).toBeVisible({ timeout: 20_000 });
+  await expect(frame.getByText("**Evidence vs. inference**", { exact: true })).toHaveCount(0);
 
   await frame.getByRole("link", { name: /Commit/ }).last().click();
   await frame.getByLabel("Chosen option").selectOption({ label: "Accept the offer" });
@@ -103,15 +104,35 @@ test("AI-first draft covers framing, comparison, premortem, and commitment", asy
   await expect(frame.locator('[data-criterion-field="name"]')).toHaveCount(4);
   await expect(frame.locator('[data-decision-field="deadline"]')).not.toHaveValue("");
   await expect(frame.locator(".draft-questions li")).toHaveCount(2);
+  const optionLayoutIsClear = await frame.locator(".option-editor").evaluateAll((editors) => editors.every((editor) => {
+    const content = editor.querySelector(":scope > div")?.getBoundingClientRect();
+    const control = editor.querySelector(":scope > .icon-control")?.getBoundingClientRect();
+    return Boolean(content && control && content.right <= control.left + 1);
+  }));
+  expect(optionLayoutIsClear).toBe(true);
 
   await frame.getByRole("link", { name: /Compare options/ }).click();
   await expect(frame.getByRole("heading", { name: /leads the first-pass comparison/i })).toBeVisible();
   await expect(frame.locator(".compare-ai__signals > div")).toHaveCount(4);
   await expect(frame.locator("[data-evidence]").first()).toHaveValue(/Draft hypothesis/i);
+  await expect(frame.locator(".evidence-source--ai").first()).toHaveText("Anna inference");
 
   await frame.getByRole("link", { name: /Challenge/ }).last().click();
   await expect(frame.getByRole("heading", { name: /If this decision fails/i })).toBeVisible();
   await expect(frame.locator(".premortem-item")).toHaveCount(5);
+  await expect(frame.getByText("User-confirmed evidence", { exact: true })).toBeVisible();
+  await expect(frame.getByText("Well supported", { exact: true })).toHaveCount(0);
+
+  const studioLayout = await frame.locator(".ai-studio").evaluate((studio) => {
+    const container = studio.getBoundingClientRect();
+    const actions = [...studio.querySelectorAll(".analysis-action")].map((button) => {
+      const box = button.getBoundingClientRect();
+      return { left: box.left, right: box.right, width: box.width };
+    });
+    return { left: container.left, right: container.right, actions };
+  });
+  expect(studioLayout.actions).toHaveLength(4);
+  expect(studioLayout.actions.every((box) => box.width > 0 && box.left >= studioLayout.left - 1 && box.right <= studioLayout.right + 1)).toBe(true);
 
   await frame.getByRole("link", { name: /Commit/ }).last().click();
   await expect(frame.getByText("Anna drafted this from your room.", { exact: false })).toBeVisible();

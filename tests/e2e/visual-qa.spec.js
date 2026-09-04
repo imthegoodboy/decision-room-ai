@@ -32,6 +32,12 @@ test("capture native Anna app views for visual QA", async ({ page }) => {
 
   await frame.getByRole("link", { name: /Challenge/ }).last().evaluate((link) => link.click());
   await expect(frame.locator(".premortem-panel article")).toHaveCount(5);
+  await frame.locator(".lens-layout").scrollIntoViewIfNeeded();
+  frameBox = await page.locator("iframe#app").boundingBox();
+  await page.screenshot({ path: "output/playwright/preparation-lens-desktop.png", animations: "disabled", clip: frameBox });
+  await frame.locator(".ai-studio").scrollIntoViewIfNeeded();
+  frameBox = await page.locator("iframe#app").boundingBox();
+  await page.screenshot({ path: "output/playwright/challenge-studio-desktop.png", animations: "disabled", clip: frameBox });
   await frame.locator(".premortem-panel").scrollIntoViewIfNeeded();
   frameBox = await page.locator("iframe#app").boundingBox();
   await page.screenshot({ path: "output/playwright/ai-premortem-desktop.png", animations: "disabled", clip: frameBox });

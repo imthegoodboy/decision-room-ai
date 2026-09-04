@@ -76,5 +76,5 @@ from the default deterministic test suite.
 
 See `DEPLOY.md` for the release checklist.
 
-Anna app identity: `decision-room-ai`, version `1.1.2`, app id `218`. See
+Anna app identity: `decision-room-ai`, version `1.1.4`, app id `218`. See
 `DEPLOY.md` for the release checklist and Marketplace review state.
