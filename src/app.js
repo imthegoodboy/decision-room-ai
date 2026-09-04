@@ -653,7 +653,7 @@ async function refineDecisionDraft(decision, { automatic = false } = {}) {
     const prompt = buildDecisionDraftPrompt(decision, new Date());
     let parsed = null;
     let issues = ["no response received"];
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       const repair = attempt
         ? `\n\nQUALITY REPAIR REQUIRED: ${issues.join("; ")}. Rewrite the complete JSON from the beginning. Ground every option, criterion, score reason, risk, and test in the user's stated decision; never use placeholder language.`
         : "";
@@ -662,7 +662,7 @@ async function refineDecisionDraft(decision, { automatic = false } = {}) {
         systemPrompt: "You are Decision Room's first-pass decision architect. Think silently, then follow the compact JSON schema exactly. Use the user's specific constraints in every section. Never use placeholder or 'verify how X fits Y' language. Never invent external facts or make the final decision. Return one complete minified JSON object only.",
         maxTokens: 4096,
         temperature: attempt ? 0.1 : 0.2,
-      });
+      }, { timeoutMs: 40_000, attempts: 1 });
       try {
         parsed = parseStructuredJson(text);
         issues = decisionDraftQualityIssues(parsed, decision);

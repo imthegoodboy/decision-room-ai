@@ -1,10 +1,10 @@
 {
   "slug": "decision-room-ai",
   "name": "Decision Room AI",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "tagline": "Turn difficult choices into clear, defensible decisions.",
   "description": "Decision Room AI replaces vague pros-and-cons lists with a proactive, saved decision workspace. Start with one decision prompt and Anna drafts realistic options, a deadline, weighted criteria, initial scores with reasoning, clarifying questions, assumptions, risks, trade-offs, and a five-cause premortem. Review and edit the draft, inspect why an option leads and whether weight shifts change the result, then confirm or revise Anna's recommendation, confidence, rationale, and next action before committing. The complete Frame → Compare → Challenge → Coach → Commit → Review record syncs through Anna Storage. No separate API key or bundled Executa is required.",
-  "changelog": "Marketplace review fixes: prevents Challenge cards and Frame controls from clipping across Anna window sizes, renders Coach Markdown safely, separates Anna inference from user-confirmed evidence, replaces the ambiguous readiness label with a transparent preparation score, and retries or rejects generic, incomplete, and wrongly grounded first drafts.",
+  "changelog": "Marketplace review fixes: prevents Challenge cards and Frame controls from clipping across Anna window sizes, renders Coach Markdown safely, separates Anna inference from user-confirmed evidence, replaces the ambiguous readiness label with a transparent preparation score, rejects generic or wrongly grounded drafts, and bounds background refinement so the UI cannot remain indefinitely busy.",
   "category": "productivity",
   "logo_file": "listing-assets/decision-room-logo.png",
   "screenshots": [

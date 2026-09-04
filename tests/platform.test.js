@@ -141,3 +141,23 @@ test("Anna LLM completion treats whitespace-only output as empty and retries", a
   assert.equal(await platform.complete({ messages: [] }), "Complete response.");
   assert.equal(calls, 2);
 });
+
+test("Anna LLM completion honors a shorter single-attempt budget for background refinement", async () => {
+  const calls = [];
+  const platform = new DecisionPlatform();
+  platform.anna = {
+    llm: {
+      async complete(request, options) {
+        calls.push({ request, options });
+        throw new Error("route unavailable");
+      },
+    },
+  };
+
+  await assert.rejects(
+    platform.complete({ messages: [] }, { timeoutMs: 40_000, attempts: 1 }),
+    /route unavailable/,
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.timeoutMs, 40_000);
+});

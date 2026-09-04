@@ -1060,21 +1060,23 @@ var DecisionPlatform = class {
     }
     localStorage.removeItem(LOCAL_KEY);
   }
-  async complete(request) {
+  async complete(request, options = {}) {
     if (!this.anna?.llm?.complete) {
       throw new Error("Open Decision Room AI inside Anna to run AI analysis. Your scoring workspace still works in preview mode.");
     }
+    const timeoutMs = Math.max(1e4, Math.min(Number(options.timeoutMs) || 1e5, 1e5));
+    const attempts = Math.max(1, Math.min(Number(options.attempts) || 2, 2));
     let lastError = new Error("Anna returned an empty analysis. Please retry.");
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
-        const response = await this.anna.llm.complete(request, { timeoutMs: 1e5 });
+        const response = await this.anna.llm.complete(request, { timeoutMs });
         const text = llmText(response);
         if (text) return text;
         lastError = new Error("Anna returned an empty analysis. Please retry.");
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
       }
-      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 650));
+      if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 650));
     }
     throw lastError;
   }
@@ -1660,7 +1662,7 @@ async function refineDecisionDraft(decision, { automatic = false } = {}) {
     const prompt = buildDecisionDraftPrompt(decision, /* @__PURE__ */ new Date());
     let parsed = null;
     let issues = ["no response received"];
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       const repair = attempt ? `
 
 QUALITY REPAIR REQUIRED: ${issues.join("; ")}. Rewrite the complete JSON from the beginning. Ground every option, criterion, score reason, risk, and test in the user's stated decision; never use placeholder language.` : "";
@@ -1669,7 +1671,7 @@ QUALITY REPAIR REQUIRED: ${issues.join("; ")}. Rewrite the complete JSON from th
         systemPrompt: "You are Decision Room's first-pass decision architect. Think silently, then follow the compact JSON schema exactly. Use the user's specific constraints in every section. Never use placeholder or 'verify how X fits Y' language. Never invent external facts or make the final decision. Return one complete minified JSON object only.",
         maxTokens: 4096,
         temperature: attempt ? 0.1 : 0.2
-      });
+      }, { timeoutMs: 4e4, attempts: 1 });
       try {
         parsed = parseStructuredJson(text);
         issues = decisionDraftQualityIssues(parsed, decision);

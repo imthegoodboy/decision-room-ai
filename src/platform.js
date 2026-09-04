@@ -158,21 +158,23 @@ export class DecisionPlatform {
     localStorage.removeItem(LOCAL_KEY);
   }
 
-  async complete(request) {
+  async complete(request, options = {}) {
     if (!this.anna?.llm?.complete) {
       throw new Error("Open Decision Room AI inside Anna to run AI analysis. Your scoring workspace still works in preview mode.");
     }
+    const timeoutMs = Math.max(10_000, Math.min(Number(options.timeoutMs) || 100_000, 100_000));
+    const attempts = Math.max(1, Math.min(Number(options.attempts) || 2, 2));
     let lastError = new Error("Anna returned an empty analysis. Please retry.");
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
-        const response = await this.anna.llm.complete(request, { timeoutMs: 100000 });
+        const response = await this.anna.llm.complete(request, { timeoutMs });
         const text = llmText(response);
         if (text) return text;
         lastError = new Error("Anna returned an empty analysis. Please retry.");
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
       }
-      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 650));
+      if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 650));
     }
     throw lastError;
   }
