@@ -50,9 +50,21 @@ test("complete frame-to-outcome workflow works inside the Anna harness", async (
   await frame.getByRole("link", { name: /Ask the Coach/ }).click();
   await expect(frame.getByRole("heading", { name: /Think it through with a sharp partner/ })).toBeVisible();
   await frame.getByRole("button", { name: /What assumption should I test first/ }).click();
-  await frame.getByRole("button", { name: "Send" }).click();
+  const appFrame = page.frames().find((candidate) => candidate.url().includes("/anna-apps/"));
+  expect(appFrame).toBeTruthy();
+  await frame.locator("#coach-form").scrollIntoViewIfNeeded();
+  await frame.getByRole("button", { name: "Send" }).scrollIntoViewIfNeeded();
+  const coachMetricsBefore = await appFrame.evaluate(() => ({ y: window.scrollY, height: document.documentElement.scrollHeight, viewport: window.innerHeight }));
+  await frame.getByRole("button", { name: "Send" }).evaluate((button) => button.click());
   await expect(frame.getByText(/current ranking is directionally useful/i)).toBeVisible({ timeout: 20_000 });
   await expect(frame.getByText("**Evidence vs. inference**", { exact: true })).toHaveCount(0);
+  const coachMetricsAfter = await appFrame.evaluate(() => ({ y: window.scrollY, height: document.documentElement.scrollHeight, viewport: window.innerHeight }));
+  expect(Math.abs(coachMetricsAfter.y - coachMetricsBefore.y), JSON.stringify({ coachMetricsBefore, coachMetricsAfter })).toBeLessThanOrEqual(2);
+  const composerBox = await frame.locator("#coach-form").boundingBox();
+  const appBox = await page.locator("iframe#app").boundingBox();
+  expect(composerBox).toBeTruthy();
+  expect(appBox).toBeTruthy();
+  expect(composerBox.y + composerBox.height).toBeLessThanOrEqual(appBox.y + appBox.height + 1);
 
   await frame.getByRole("link", { name: /Commit/ }).last().click();
   await frame.getByLabel("Chosen option").selectOption({ label: "Accept the offer" });
@@ -62,11 +74,25 @@ test("complete frame-to-outcome workflow works inside the Anna harness", async (
   await expect(frame.getByText("Commitment recorded", { exact: false })).toBeVisible();
 
   await frame.getByRole("link", { name: /Review/ }).last().click();
+  await expect(frame.locator('.stage-meta .progress-ring[aria-label="100% complete"]')).toBeVisible();
   await frame.getByLabel("Describe the outcome").fill("The written plan clarified ownership and reduced the main uncertainty.");
   await frame.getByLabel("What should future-you remember?").fill("Test the riskiest promise before treating it as evidence.");
   await frame.getByRole("button", { name: /Complete the loop/ }).click();
   await expect(frame.getByText("Lesson retained")).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+test("an unavailable or unrelated model response never exposes the legacy generic table", async ({ page }) => {
+  const frame = await openRoom(page);
+  await frame.getByRole("link", { name: /Open a new room/ }).click();
+  await frame.getByLabel("What decision are you facing?").fill("Should I get a dog?");
+  await frame.getByRole("button", { name: /Build my first draft/ }).click();
+
+  await expect(frame.locator('[data-option-field="name"]')).toHaveCount(3);
+  await expect.poll(() => frame.locator('[data-option-field="name"]').evaluateAll((inputs) => inputs.map((input) => input.value))).toEqual(["Adopt a dog", "Wait before adopting a dog", "Foster or dog-sit first"]);
+  await expect.poll(() => frame.locator('[data-criterion-field="name"]').evaluateAll((inputs) => inputs.map((input) => input.value))).toEqual(["Daily care capacity", "Home and lifestyle fit", "Long-term affordability", "Animal welfare confidence"]);
+  await expect(frame.getByText("Take the leading path", { exact: true })).toHaveCount(0);
+  await expect(frame.getByText(/AI-suggested starting point/i)).toHaveCount(0);
 });
 
 test("first-use flow centers the decision prompt and keeps its primary action in the default Anna viewport", async ({ page }) => {

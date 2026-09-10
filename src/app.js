@@ -18,6 +18,7 @@ import {
   dateOnly,
   decisionDraftQualityIssues,
   decisionProgress,
+  workflowProgress,
   duplicateDecision,
   formatCoachResponse,
   normalizeAnalysis,
@@ -47,6 +48,7 @@ const state = {
   draftPromise: null,
   coachBusy: false,
   coachDraft: "",
+  coachViewportTop: null,
   saving: false,
   saveTimer: null,
 };
@@ -315,10 +317,10 @@ function renderNew() {
 }
 
 function stageHeader(decision, view, eyebrow, title, description) {
-  const progress = decisionProgress(decision);
+  const progress = workflowProgress(view);
   return `<header class="stage-header reveal">
     <div class="stage-heading"><p class="eyebrow">${escapeHtml(eyebrow)}</p><h1>${title}</h1><p>${escapeHtml(description)}</p></div>
-    <div class="stage-meta"><span>${statusLabel(decision)}</span>${progressRing(progress)}<button class="icon-control" type="button" data-action="decision-menu" data-id="${attr(decision.id)}" aria-label="Decision actions">${icon("more")}</button></div>
+    <div class="stage-meta"><span>Step ${["frame", "compare", "challenge", "coach", "commit", "review"].indexOf(view) + 1} of 6</span>${progressRing(progress)}<button class="icon-control" type="button" data-action="decision-menu" data-id="${attr(decision.id)}" aria-label="Decision actions">${icon("more")}</button></div>
   </header>
   <nav class="stage-tabs reveal" aria-label="Decision workflow">
     ${[["frame", "01", "Frame"], ["compare", "02", "Compare"], ["challenge", "03", "Challenge"], ["coach", "04", "Coach"], ["commit", "05", "Commit"], ["review", "06", "Review"]].map(([key, number, label]) => `<a class="${view === key ? "is-active" : ""}" href="${decisionUrl(decision, key)}"><small>${number}</small><span>${label}</span></a>`).join("")}
@@ -749,6 +751,8 @@ async function runAnalysis(decision, type) {
 async function sendCoachMessage(decision, question) {
   const cleanQuestion = String(question || "").trim().slice(0, 1200);
   if (!cleanQuestion || state.coachBusy) return;
+  const conversationViewportTop = Number.isFinite(state.coachViewportTop) ? state.coachViewportTop : window.scrollY;
+  state.coachViewportTop = null;
   const userMessage = { id: createId("message"), role: "user", text: cleanQuestion, createdAt: new Date().toISOString() };
   decision.coach.push(userMessage);
   if (decision.coach.length > 24) decision.coach = decision.coach.slice(-24);
@@ -756,7 +760,7 @@ async function sendCoachMessage(decision, question) {
   state.coachDraft = "";
   touch(decision);
   render();
-  requestAnimationFrame(() => document.getElementById("chat-log")?.lastElementChild?.scrollIntoView({ block: "end", behavior: state.store.preferences.reduceMotion ? "auto" : "smooth" }));
+  settleCoachViewport(conversationViewportTop);
   try {
     if (state.draftPromise) await state.draftPromise;
     const text = await state.platform.complete({
@@ -778,11 +782,19 @@ async function sendCoachMessage(decision, question) {
   } finally {
     state.coachBusy = false;
     render();
-    requestAnimationFrame(() => {
-      document.getElementById("chat-log")?.lastElementChild?.scrollIntoView({ block: "end", behavior: "auto" });
-      document.getElementById("coach-input")?.focus();
-    });
+    settleCoachViewport(conversationViewportTop, { focusComposer: true });
   }
+}
+
+function settleCoachViewport(viewportTop, { behavior = "auto", focusComposer = false } = {}) {
+  const restore = () => {
+    const log = document.getElementById("chat-log");
+    if (log) log.scrollTo({ top: log.scrollHeight, behavior });
+    if (focusComposer) document.getElementById("coach-input")?.focus({ preventScroll: true });
+    window.scrollTo({ top: viewportTop, left: 0, behavior: "auto" });
+  };
+  restore();
+  requestAnimationFrame(restore);
 }
 
 function downloadJson(filename, value) {
@@ -801,6 +813,12 @@ function openDecisionMenu(decision) {
   modalRoot.hidden = false;
   modalRoot.innerHTML = `<div class="modal-backdrop" data-action="close-modal"></div><section class="action-sheet" role="dialog" aria-modal="true" aria-labelledby="actions-title"><div class="action-sheet__head"><div><p class="eyebrow">Decision actions</p><h2 id="actions-title">${escapeHtml(decision.title)}</h2></div><button class="icon-control" type="button" data-action="close-modal" aria-label="Close">${icon("close")}</button></div><div class="action-list"><a href="${decisionUrl(decision, "report")}">${icon("print")}<span><strong>Open decision brief</strong><small>See the complete printable record.</small></span></a><button type="button" data-action="duplicate-decision" data-id="${attr(decision.id)}">${icon("copy")}<span><strong>Duplicate room</strong><small>Reuse the structure for a fresh decision.</small></span></button><button type="button" data-action="export-decision" data-id="${attr(decision.id)}">${icon("download")}<span><strong>Export JSON</strong><small>Keep a portable copy of this room.</small></span></button><button class="danger-action" type="button" data-action="delete-decision" data-id="${attr(decision.id)}">${icon("trash")}<span><strong>Delete decision</strong><small>This cannot be undone.</small></span></button></div></section>`;
 }
+
+document.addEventListener("pointerdown", (event) => {
+  if (event.target instanceof Element && event.target.closest('#coach-form button[type="submit"]')) {
+    state.coachViewportTop = window.scrollY;
+  }
+}, { capture: true, passive: true });
 
 app.addEventListener("submit", async (event) => {
   const form = event.target;
@@ -870,7 +888,7 @@ app.addEventListener("submit", async (event) => {
     const question = String(data.get("question") || "");
     if (!question.trim()) {
       toast("Write a question for the Coach first.", "error");
-      document.getElementById("coach-input")?.focus();
+      document.getElementById("coach-input")?.focus({ preventScroll: true });
       return;
     }
     await sendCoachMessage(decision, question);
@@ -993,8 +1011,10 @@ document.addEventListener("click", async (event) => {
   else if (action === "run-analysis" && decision) await runAnalysis(decision, trigger.dataset.type);
   else if (action === "coach-starter" && decision) {
     state.coachDraft = trigger.dataset.question || "";
+    const viewportTop = window.scrollY;
     render();
-    document.getElementById("coach-input")?.focus();
+    document.getElementById("coach-input")?.focus({ preventScroll: true });
+    window.scrollTo({ top: viewportTop, left: 0, behavior: "auto" });
   } else if (action === "clear-coach" && decision) {
     showConfirm({ title: "Clear this conversation?", message: "This removes the saved Coach messages from this decision. Your matrix and analyses stay unchanged.", confirmLabel: "Clear conversation", destructive: true, onConfirm: async () => { decision.coach = []; state.coachDraft = ""; touch(decision); await saveNow(); render(); toast("Coach conversation cleared."); } });
   }

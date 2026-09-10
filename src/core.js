@@ -256,7 +256,7 @@ export function normalizeDecision(raw, now = new Date()) {
     reviewedAt: clean(raw.outcome.reviewedAt, 40) || now.toISOString(),
   } : null;
 
-  return {
+  const normalized = {
     ...fallback,
     id: clean(raw.id, 100) || fallback.id,
     title: clean(raw.title, 140) || "Untitled decision",
@@ -282,6 +282,14 @@ export function normalizeDecision(raw, now = new Date()) {
     commitment,
     outcome,
   };
+
+  const legacyGeneric = draftMeta?.source === "local"
+    && !commitment
+    && options.some((option) => /^(?:take the leading path|keep the current path|run a smaller reversible test)$/i.test(option.name));
+  if (legacyGeneric) {
+    applyDecisionDraft(normalized, buildFallbackDraft(normalized, now), { source: "local", generatedAt: now.toISOString() });
+  }
+  return normalized;
 }
 
 export function normalizeStore(raw) {
@@ -300,12 +308,21 @@ export function normalizeStore(raw) {
 
 function inferredOptions(decision) {
   const source = cleanLong(decision.title, 500);
-  const title = clean(source.split(/[?!]/)[0], 140).replace(/^\s*(should|shall|do)\s+(i|we)\s+/i, "").replace(/[?!.]+$/, "");
+  const title = clean(source.split(/[?!]/)[0], 140)
+    .replace(/^\s*(?:should|shall|could|can|do|does|did|would)\s+(?:i|we)\s+/i, "")
+    .replace(/^\s*whether\s+(?:i|we)\s+/i, "")
+    .replace(/[?!.]+$/, "");
   const split = title.split(/\s+(?:or|versus|vs\.?|\/),?\s+/i).map((item) => clean(item, 100)).filter(Boolean);
   if (split.length >= 2) {
     const options = split.slice(0, 3).map((item) => item.replace(/^whether\s+/i, "").replace(/[,;:]$/, ""));
     if (options.length === 2 && /role|career|job|offer|team|commut/i.test(source)) options.push("Negotiate a time-boxed hybrid trial");
     return options;
+  }
+
+  const fullContext = `${decision.title || ""} ${decision.context || ""}`;
+  if (/\b(dog|cat|pet|puppy|kitten|adopt|foster)\b/i.test(fullContext)) {
+    const animal = /\bcat|kitten\b/i.test(fullContext) ? "cat" : /\bpet\b/i.test(fullContext) && !/\bdog|puppy\b/i.test(fullContext) ? "pet" : "dog";
+    return [`Adopt a ${animal}`, `Wait before adopting a ${animal}`, `Foster or ${animal}-sit first`];
   }
   const byTemplate = {
     career: ["Accept the new opportunity", "Stay on the current path", "Negotiate a reversible trial"],
@@ -314,11 +331,27 @@ function inferredOptions(decision) {
     venture: ["Pursue the opportunity", "Keep the current focus", "Run a constrained pilot"],
     hire: ["Hire the leading candidate", "Continue the search", "Run a paid work sample"],
   };
-  return byTemplate[decision.template] || ["Take the leading path", "Keep the current path", "Run a smaller reversible test"];
+  if (byTemplate[decision.template]) return byTemplate[decision.template];
+
+  const subject = title || "this decision";
+  const first = subject.charAt(0).toUpperCase() + subject.slice(1);
+  return [
+    first,
+    `Wait before pursuing ${subject}`.slice(0, 100),
+    `Test ${subject} with a time-boxed trial`.slice(0, 100),
+  ];
 }
 
 function inferredCriteria(decision) {
   const source = `${decision.title || ""} ${decision.context || ""}`;
+  if (/\b(dog|cat|pet|puppy|kitten|adopt|foster)\b/i.test(source)) {
+    return [
+      { name: "Daily care capacity", weight: 30, description: "Time and energy available for reliable everyday care." },
+      { name: "Home and lifestyle fit", weight: 30, description: "Housing, schedule, travel, and household compatibility." },
+      { name: "Long-term affordability", weight: 25, description: "Routine, emergency, and care costs over the commitment." },
+      { name: "Animal welfare confidence", weight: 15, description: "Evidence that the home can meet the animal's needs." },
+    ];
+  }
   if (/role|career|job|offer|team|commut|remote|salary|compensation/i.test(source)) {
     return [
       { name: "Career growth", weight: 35, description: "Scope, learning, and future opportunity." },
@@ -345,6 +378,31 @@ function inferredCriteria(decision) {
 function fallbackScoreAndReason(decision, option, optionIndex, criterion, criterionIndex) {
   const source = `${decision.title || ""} ${decision.context || ""}`;
   const career = /role|career|job|offer|team|commut|remote|salary|compensation/i.test(source);
+  const pet = /\b(dog|cat|pet|puppy|kitten|adopt|foster)\b/i.test(source);
+  if (pet) {
+    const scores = [[3, 3, 2, 3], [4, 3, 5, 2], [4, 5, 4, 5]];
+    const reasons = [
+      [
+        "Adoption creates daily care immediately; the available routine has not been tested.",
+        "A permanent pet may fit the household, but housing and travel constraints are unknown.",
+        "Food, veterinary, grooming, and emergency costs begin with a full commitment.",
+        "A good match is possible, but care capacity and temperament fit need direct evidence.",
+      ],
+      [
+        "Waiting protects the current schedule but produces little evidence about actual care capacity.",
+        "The current lifestyle remains unchanged while pet compatibility stays unresolved.",
+        "Delaying avoids immediate pet costs while a realistic care budget is prepared.",
+        "No animal is placed at risk, but the decision remains untested.",
+      ],
+      [
+        "Fostering or pet-sitting tests feeding, exercise, cleanup, and attention in the real routine.",
+        "A trial reveals how a pet affects the actual home, schedule, and travel pattern.",
+        "A short trial exposes routine costs before taking on a long-term obligation.",
+        "Supervised experience provides the strongest direct signal about a responsible permanent match.",
+      ],
+    ];
+    return { rating: scores[optionIndex]?.[criterionIndex] ?? 3, reason: `Anna inference: ${reasons[optionIndex]?.[criterionIndex] || "A real care trial would reduce this uncertainty."}` };
+  }
   if (career) {
     const scores = [[5, 2, 4, 4], [2, 5, 3, 3], [4, 4, 4, 3]];
     const reasons = [
@@ -370,7 +428,13 @@ function fallbackScoreAndReason(decision, option, optionIndex, criterion, criter
     return { rating: scores[optionIndex]?.[criterionIndex] ?? 3, reason: `Anna inference: ${reasons[optionIndex]?.[criterionIndex] || "This trade-off needs an observable test before commitment."}` };
   }
   const rating = Math.min(5, Math.max(1, 3 + (optionIndex === 0 ? (criterionIndex === 0 ? 1 : 0) : optionIndex === 1 ? (criterionIndex === 2 ? 1 : 0) : (criterionIndex === 3 ? 1 : 0))));
-  return { rating, reason: `Anna inference: ${option.name} is provisionally ${rating}/5 on ${criterion.name}; define one observable result before relying on it.` };
+  const subject = clean(decision.title, 120).replace(/[?!.]+$/, "") || "this decision";
+  const reasons = [
+    `${option.name} addresses “${subject}” directly, but its effect on ${criterion.name} is still an inference.`,
+    `${option.name} protects the current position on ${criterion.name} while delaying the possible upside.`,
+    `${option.name} can produce direct evidence about ${criterion.name} before a full commitment.`,
+  ];
+  return { rating, reason: `Anna inference: ${reasons[optionIndex] || reasons[2]}` };
 }
 
 function draftPremortem(options, criteria) {
@@ -389,11 +453,19 @@ export function buildFallbackDraft(decision, now = new Date()) {
   const optionNames = inferredOptions(decision);
   const criteria = inferredCriteria(decision);
   const career = /role|career|job|offer|team|commut|remote|salary|compensation/i.test(`${decision.title || ""} ${decision.context || ""}`);
+  const pet = /\b(dog|cat|pet|puppy|kitten|adopt|foster)\b/i.test(`${decision.title || ""} ${decision.context || ""}`);
+  const subject = clean(decision.title, 120).replace(/[?!.]+$/, "") || "this decision";
   const options = optionNames.map((name, optionIndex) => ({
     name,
-    notes: career
+    notes: pet
+      ? ["Makes the long-term commitment now; care capacity still needs testing.", "Keeps the present routine while gathering a realistic budget and constraints.", "Tests daily care and lifestyle fit before a permanent adoption."][optionIndex] || `Tests a practical part of ${subject}.`
+      : career
       ? ["Highest growth upside; the commute cost remains untested.", "Preserves the known team and routine; the growth path needs proof.", "Tests the role and commute before an irreversible move."][optionIndex] || "A negotiated path that keeps the decision reversible."
-      : optionIndex === 0 ? "Direct path from the question; test its largest upside and constraint." : "Alternative path; identify one observable advantage and one trade-off.",
+      : [
+        `Moves directly on “${subject}”; test the most important claimed benefit.`,
+        `Preserves the current position while gathering evidence about “${subject}”.`,
+        `Creates direct evidence about “${subject}” before a full commitment.`,
+      ][optionIndex] || `Adds another evidence-producing path for “${subject}”.`,
   }));
   const ratings = {};
   const evidence = {};
@@ -406,7 +478,11 @@ export function buildFallbackDraft(decision, now = new Date()) {
       evidence[option.name][criterion.name] = reason;
     });
   });
-  const assumptions = career ? [
+  const assumptions = pet ? [
+    { text: "The household can provide consistent daily care for years.", confidence: 2, evidence: "Test the full feeding, exercise, cleanup, and attention routine for two weeks." },
+    { text: "Housing, travel, and household rules allow a suitable pet.", confidence: 3, evidence: "Confirm written housing rules and map care for travel days." },
+    { text: "Routine and emergency care fit the available budget.", confidence: 2, evidence: "Price local veterinary care, food, insurance, supplies, and an emergency reserve." },
+  ] : career ? [
     { text: "The new role provides meaningful ownership, not only a new title.", confidence: 3, evidence: "Ask for written scope, authority, team, and success measures." },
     { text: "The commute is sustainable during normal peak-hour weeks.", confidence: 2, evidence: "Run the real route for five workdays and track energy." },
     { text: "A hybrid arrangement is genuinely available and durable.", confidence: 2, evidence: "Get the weekly remote schedule and review terms in writing." },
@@ -419,13 +495,19 @@ export function buildFallbackDraft(decision, now = new Date()) {
     deadline: dateOnly(decision.deadline) || addDays(now, 30),
     options,
     criteria,
+    scores: options.flatMap((option) => criteria.map((criterion) => ({
+      option: option.name,
+      criterion: criterion.name,
+      rating: ratings[option.name][criterion.name],
+      reasoning: evidence[option.name][criterion.name],
+    }))),
     ratings,
     evidence,
     assumptions,
     risks: options.slice(0, 3).map((option, index) => ({ option: option.name, text: `${option.name} underdelivers on the highest-stakes constraint.`, likelihood: index === 0 ? 3 : 2, impact: 4, mitigation: "Run a small test and define a clear exit condition before scaling the choice." })),
     premortem: draftPremortem(options, criteria),
     clarifyingQuestions: decision.context ? ["Which fact in this context is least certain?", "What would make you change the current leading path?"] : ["What constraint is truly non-negotiable?", "What evidence would make you change the leading path?"],
-    reasoning: career ? "This starter draft makes the growth-versus-commute trade-off explicit and adds a reversible negotiated path. Every score reason is an inference until you confirm it." : "This starter draft turns the prompt into comparable paths without treating inference as fact. Replace each provisional reason with an observable result.",
+    reasoning: pet ? "This starter draft compares permanent adoption with waiting and a real care trial. Every score is an inference until the household tests the routine." : career ? "This starter draft makes the growth-versus-commute trade-off explicit and adds a reversible negotiated path. Every score reason is an inference until you confirm it." : `This starter draft turns “${subject}” into three comparable paths and an evidence-producing trial without treating inference as fact.`,
     commitSuggestion: { option: options[0]?.name, confidence: 3, rationale: `The first-pass comparison currently favors ${options[0]?.name || "the leading option"}, but the ranking is provisional until the highest-weighted criterion has direct evidence.`, nextAction: `Run one small test of ${criteria[0]?.name || "the top criterion"} before committing.` },
   };
 }
@@ -490,8 +572,8 @@ export function decisionDraftQualityIssues(raw, decision = null) {
   const criteria = Array.isArray(draft.criteria) ? draft.criteria : [];
   const scores = Array.isArray(draft.scores) ? draft.scores : [];
   const issues = [];
-  const genericReason = /verify how\s+.+\s+fits\s+.+|draft hypothesis\s*\([^)]*\)\s*:\s*verify/i;
-  const genericName = /^(?:option [a-z0-9]+|take the leading path|keep the current path)$/i;
+  const genericReason = /verify how\s+.+\s+fits\s+.+|draft hypothesis\s*\([^)]*\)\s*:\s*verify|ai-suggested (?:starting point|alternative)|identify one observable advantage/i;
+  const genericName = /^(?:option [a-z0-9]+|take the leading path|keep the current path|run a (?:smaller|small) reversible test|choose the (?:leading|best|preferred) path)$/i;
   if (options.length < 2 || options.length > 3) issues.push("use two or three distinct options");
   if (criteria.length !== 4) issues.push("return exactly four criteria");
   if (scores.length !== options.length * criteria.length) issues.push("include one score and reason for every option/criterion pair");
@@ -501,12 +583,13 @@ export function decisionDraftQualityIssues(raw, decision = null) {
   if (!Array.isArray(draft.premortem) || draft.premortem.length !== MAX_PREMORTEM_ITEMS) issues.push("return exactly five premortem items");
   if (options.some((item) => genericName.test(clean(item?.name, 100)))) issues.push("replace placeholder option names with realistic paths");
   if (decision) {
-    const stopWords = new Set(["about", "after", "before", "could", "first", "from", "have", "into", "more", "should", "than", "that", "their", "there", "these", "they", "this", "what", "when", "where", "which", "with", "would"]);
+    const stopWords = new Set(["about", "after", "before", "could", "first", "from", "get", "have", "into", "more", "should", "than", "that", "their", "there", "these", "they", "this", "what", "when", "where", "which", "with", "would"]);
     const sourceTokens = [...new Set(`${decision.title || ""} ${decision.context || ""}`.toLowerCase().match(/[a-z0-9]+/g) || [])]
-      .filter((token) => token.length >= 4 && !stopWords.has(token));
+      .filter((token) => token.length >= 3 && !stopWords.has(token));
     const renderedDraft = JSON.stringify(draft).toLowerCase();
     const overlap = sourceTokens.filter((token) => renderedDraft.includes(token));
     if (sourceTokens.length >= 2 && overlap.length < Math.min(2, sourceTokens.length)) issues.push("ground the draft in at least two specific terms from the user's decision");
+    if (sourceTokens.length === 1 && overlap.length === 0) issues.push("ground the draft in the user's decision topic");
   }
   return [...new Set(issues)];
 }
@@ -832,6 +915,12 @@ export function decisionProgress(decision) {
   if (decision.commitment) completed += 1;
   if (decision.outcome) completed += 1;
   return Math.round((completed / 7) * 100);
+}
+
+export function workflowProgress(view) {
+  const stages = ["frame", "compare", "challenge", "coach", "commit", "review"];
+  const index = stages.indexOf(view);
+  return index < 0 ? 0 : Math.round(((index + 1) / stages.length) * 100);
 }
 
 export function duplicateDecision(decision, now = new Date()) {

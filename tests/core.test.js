@@ -16,6 +16,7 @@ import {
   createDecision,
   decisionDraftQualityIssues,
   decisionProgress,
+  workflowProgress,
   duplicateDecision,
   formatCoachResponse,
   normalizeDecision,
@@ -56,6 +57,29 @@ test("AI first draft fills the room instead of leaving a blank worksheet", () =>
   assert.deepEqual(decision.criteria.map((criterion) => criterion.name), ["Career growth", "Commute and life fit", "Role scope and support", "Total reward"]);
   assert.doesNotMatch(JSON.stringify(decision.evidence), /verify how/i);
   assert.equal(decision.evidenceSources[decision.options[0].id][decision.criteria[0].id], "ai");
+});
+
+test("model failure still produces a specific pet decision instead of the legacy generic worksheet", () => {
+  const now = new Date("2026-09-10T10:00:00Z");
+  const decision = createDecision({ title: "Should I get a dog?", template: "blank" }, now);
+  applyDecisionDraft(decision, buildFallbackDraft(decision, now), { source: "local", generatedAt: now.toISOString() });
+
+  assert.deepEqual(decision.options.map((option) => option.name), ["Adopt a dog", "Wait before adopting a dog", "Foster or dog-sit first"]);
+  assert.deepEqual(decision.criteria.map((criterion) => criterion.name), ["Daily care capacity", "Home and lifestyle fit", "Long-term affordability", "Animal welfare confidence"]);
+  assert.doesNotMatch(JSON.stringify(decision), /Take the leading path|AI-suggested starting point|verify how/i);
+  assert.match(decision.evidence[decision.options[2].id][decision.criteria[0].id], /feeding, exercise, cleanup/i);
+});
+
+test("legacy generic local drafts are upgraded when restored", () => {
+  const original = createDecision({ title: "Should I get a dog?", template: "blank" });
+  applyDecisionDraft(original, buildFallbackDraft(createDecision({ title: "Choose a path", template: "blank" })), { source: "local" });
+  original.title = "Should I get a dog?";
+  original.options[0].name = "Take the leading path";
+  original.options[1].name = "Keep the current path";
+  original.options[2].name = "Run a smaller reversible test";
+
+  const restored = normalizeDecision(original, new Date("2026-09-10T10:00:00Z"));
+  assert.deepEqual(restored.options.map((option) => option.name), ["Adopt a dog", "Wait before adopting a dog", "Foster or dog-sit first"]);
 });
 
 test("AI draft and comparison prompts make the proactive role explicit", () => {
@@ -294,4 +318,6 @@ test("progress reflects the complete decision lifecycle", () => {
   decision.commitment = { optionId: decision.options[0].id };
   decision.outcome = { result: "Done", lesson: "Learned" };
   assert.ok(decisionProgress(decision) > early);
+  assert.equal(workflowProgress("frame"), 17);
+  assert.equal(workflowProgress("review"), 100);
 });
