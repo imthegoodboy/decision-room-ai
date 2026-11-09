@@ -3,6 +3,7 @@ node_modules/
 test-results/
 playwright-report/
 output/
+trace-inspect-*/
 listing-assets/*.tmp.png
 *.log
 .DS_Store

@@ -1383,7 +1383,7 @@ function shell(content, decision = activeDecision()) {
       <a class="icon-control" href="#/new" aria-label="Create a decision">${icon("plus")}</a>
     </div>
     <main id="workspace" class="workspace" tabindex="-1">${content}</main>
-    ${isDecision ? `<nav class="mobile-stage-nav" aria-label="Decision stages">${stages.map(([view, label, iconName]) => `<a class="${routeView === view ? "is-active" : ""}" href="${decisionUrl(decision, view)}">${icon(iconName)}<span>${label}</span></a>`).join("")}</nav>` : ""}
+    ${isDecision ? `<nav class="mobile-stage-nav" aria-label="Decision stages">${stages.map(([view, label, iconName]) => `<a class="${routeView === view ? "is-active" : ""}" href="${decisionUrl(decision, view)}" aria-current="${routeView === view ? "page" : "false"}">${icon(iconName)}<span>${label}</span></a>`).join("")}</nav>` : ""}
   </div>`;
 }
 function progressRing(value) {
@@ -1473,7 +1473,7 @@ function stageHeader(decision, view, eyebrow, title, description) {
     <div class="stage-meta"><span>Step ${["frame", "compare", "challenge", "coach", "commit", "review"].indexOf(view) + 1} of 6</span>${progressRing(progress)}<button class="icon-control" type="button" data-action="decision-menu" data-id="${attr(decision.id)}" aria-label="Decision actions">${icon("more")}</button></div>
   </header>
   <nav class="stage-tabs reveal" aria-label="Decision workflow">
-    ${[["frame", "01", "Frame"], ["compare", "02", "Compare"], ["challenge", "03", "Challenge"], ["coach", "04", "Coach"], ["commit", "05", "Commit"], ["review", "06", "Review"]].map(([key, number, label]) => `<a class="${view === key ? "is-active" : ""}" href="${decisionUrl(decision, key)}"><small>${number}</small><span>${label}</span></a>`).join("")}
+    ${[["frame", "01", "Frame"], ["compare", "02", "Compare"], ["challenge", "03", "Challenge"], ["coach", "04", "Coach"], ["commit", "05", "Commit"], ["review", "06", "Review"]].map(([key, number, label]) => `<a class="${view === key ? "is-active" : ""}" href="${decisionUrl(decision, key)}" aria-current="${view === key ? "page" : "false"}"><small>${number}</small><span>${label}</span></a>`).join("")}
   </nav>`;
 }
 function draftStudio(decision) {
@@ -1636,7 +1636,7 @@ function renderCommit(decision) {
   const suggestion = !commitment ? decision.commitSuggestion : null;
   const draft = commitment || suggestion;
   return shell(`<div class="page page--stage">
-    ${stageHeader(decision, "commit", "04 \xB7 Commit", "Choose deliberately.\nLeave a trail.", "Record the choice, confidence, and first action. A clear rationale is insurance against hindsight bias.")}
+    ${stageHeader(decision, "commit", "05 \xB7 Commit", "Choose deliberately.\nLeave a trail.", "Record the choice, confidence, and first action. A clear rationale is insurance against hindsight bias.")}
     <section class="commit-layout reveal">
       <aside class="recommendation-panel"><p class="eyebrow">What the matrix says</p><span class="recommendation-score">${leader?.score ?? "\u2014"}<small>/100</small></span><h2>${escapeHtml2(leader?.name || "No leader yet")}</h2><p>${leader ? `Currently leads the weighted comparison${scores[1] ? ` by ${(leader.score - scores[1].score).toFixed(1)} points` : ""}.` : "Complete the comparison matrix first."}</p><div class="principle-note"><strong>Remember</strong><p>A score is a summary of your assumptions. It is not permission to ignore your judgment.</p></div></aside>
       <form id="commit-form" class="paper-shell paper-shell--large"><div class="paper-core">
@@ -1661,10 +1661,10 @@ function renderReview(decision) {
   const commitment = decision.commitment;
   const chosen = commitment ? decision.options.find((option) => option.id === commitment.optionId) : null;
   if (!commitment) {
-    return shell(`<div class="page page--stage">${stageHeader(decision, "review", "05 \xB7 Review", "Learning begins\nafter the choice.", "Review the result without rewriting what you knew at the time.")}<section class="locked-review reveal"><span>05</span><div><h2>Commit before reviewing.</h2><p>The outcome review is intentionally locked until you record a choice, rationale, and review date.</p><a class="button button--ink button--nested" href="${decisionUrl(decision, "commit")}"><span>Go to commitment</span><i>${icon("arrow")}</i></a></div></section></div>`, decision);
+    return shell(`<div class="page page--stage">${stageHeader(decision, "review", "06 \xB7 Review", "Learning begins\nafter the choice.", "Review the result without rewriting what you knew at the time.")}<section class="locked-review reveal"><span>06</span><div><h2>Commit before reviewing.</h2><p>The outcome review is intentionally locked until you record a choice, rationale, and review date.</p><a class="button button--ink button--nested" href="${decisionUrl(decision, "commit")}"><span>Go to commitment</span><i>${icon("arrow")}</i></a></div></section></div>`, decision);
   }
   return shell(`<div class="page page--stage">
-    ${stageHeader(decision, "review", "05 \xB7 Review", "Close the loop.\nKeep the lesson.", "Separate decision quality from outcome luck, then carry the useful lesson into your next choice.")}
+    ${stageHeader(decision, "review", "06 \xB7 Review", "Close the loop.\nKeep the lesson.", "Separate decision quality from outcome luck, then carry the useful lesson into your next choice.")}
     <section class="review-timeline reveal"><div><span>Decided</span><strong>${shortDate(commitment.decidedAt)}</strong></div><i></i><div><span>Review planned</span><strong>${shortDate(commitment.reviewDate)}</strong><small>${relativeDate(commitment.reviewDate)}</small></div><i></i><div class="${decision.outcome ? "is-complete" : ""}"><span>Outcome</span><strong>${decision.outcome ? "Recorded" : "Open"}</strong></div></section>
     <section class="review-layout reveal">
       <aside class="decision-memory"><p class="eyebrow">The record</p><h2>${escapeHtml2(chosen?.name || "Chosen option")}</h2><blockquote>${escapeHtml2(commitment.rationale)}</blockquote><dl><div><dt>Confidence then</dt><dd>${commitment.confidence}/5</dd></div><div><dt>First action</dt><dd>${escapeHtml2(commitment.nextAction)}</dd></div></dl></aside>
