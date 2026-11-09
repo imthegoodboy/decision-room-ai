@@ -15,10 +15,18 @@ export const dateOnly = (value) => {
   return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== candidate ? "" : candidate;
 };
 
+// Calendar dates follow the user's local day; toISOString() would use UTC and
+// land on the previous day east of UTC shortly after midnight.
+export const localDateOnly = (date) => [
+  date.getFullYear(),
+  String(date.getMonth() + 1).padStart(2, "0"),
+  String(date.getDate()).padStart(2, "0"),
+].join("-");
+
 function addDays(date, days) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
-  return next.toISOString().slice(0, 10);
+  return localDateOnly(next);
 }
 
 export function createId(prefix = "item") {
@@ -306,6 +314,21 @@ export function normalizeStore(raw) {
   };
 }
 
+// Accepts a full backup ({ decisions }) or a single-room export ({ decision })
+// and adds its rooms to the library instead of replacing it. A room with the
+// same id is updated in place; nothing is dropped to make room.
+export function mergeImportedDecisions(store, raw) {
+  const payload = raw?.decision && !Array.isArray(raw?.decisions) ? { decisions: [raw.decision] } : raw;
+  const imported = [...new Map(normalizeStore(payload).decisions.map((decision) => [decision.id, decision])).values()];
+  if (!imported.length) throw new Error("No valid decisions were found in this file.");
+  const importedIds = new Set(imported.map((decision) => decision.id));
+  const decisions = [...imported, ...store.decisions.filter((decision) => !importedIds.has(decision.id))];
+  if (decisions.length > MAX_DECISIONS) {
+    throw new Error(`Importing this file would exceed the ${MAX_DECISIONS}-room limit. Export or delete older rooms first.`);
+  }
+  return { store: { ...store, decisions }, count: imported.length };
+}
+
 function inferredOptions(decision) {
   const source = cleanLong(decision.title, 500);
   const title = clean(source.split(/[?!]/)[0], 140)
@@ -525,7 +548,7 @@ export function buildDecisionDraftPrompt(decision, now = new Date()) {
     "Use only the supplied context; do not invent external facts. Keep every string under 14 words and the visible response under 1200 tokens.",
     "Return one minified JSON object only. Use this compact schema (array indexes in s, r, and m refer to o and c):",
     JSON.stringify({ d: "YYYY-MM-DD", o: [["option", "note"]], c: [["criterion", 25, "why it matters"]], s: [[0, 0, 3, "score reason"]], a: [["assumption", 3, "evidence or test"]], r: [[0, "risk", 3, 4, "mitigation"]], p: [["failure cause", "early warning", "mitigation"]], q: ["question"], m: [0, 3, "conditional rationale", "next action"], why: "brief overview" }),
-    `TODAY: ${now.toISOString().slice(0, 10)}`,
+    `TODAY: ${localDateOnly(now)}`,
     `DECISION QUESTION: ${decision.title}`,
     `CONTEXT: ${decision.context || "No additional context was supplied."}`,
     `STARTER SHAPE (use only as a fallback, improve it when the context supports doing so): ${JSON.stringify({ options: fallback.options.map((item) => item.name), criteria: fallback.criteria.map((item) => item.name) })}`,

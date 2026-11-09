@@ -24,6 +24,8 @@ import {
   parseStructuredJson,
   isAnalysisPayload,
   isDecisionDraftPayload,
+  localDateOnly,
+  mergeImportedDecisions,
   sensitivityAnalysis,
 } from "../src/core.js";
 import { renderSafeMarkdown } from "../src/markdown.js";
@@ -247,6 +249,31 @@ test("stored decisions are bounded and malformed values are normalized", () => {
   assert.equal(store.decisions.length, MAX_DECISIONS);
   assert.equal(store.preferences.reduceMotion, true);
   assert.ok(store.decisions.every((decision) => decision.options.length >= 2));
+});
+
+test("importing adds rooms to the library and accepts a single-room export", () => {
+  const existing = createDecision({ title: "Existing room" });
+  const store = normalizeStore({ decisions: [existing], preferences: { reduceMotion: true } });
+  const single = createDecision({ title: "Exported room" });
+
+  const fromSingle = mergeImportedDecisions(store, { app: "Decision Room AI", version: 1, decision: single });
+  assert.equal(fromSingle.count, 1);
+  assert.deepEqual(fromSingle.store.decisions.map((decision) => decision.title), ["Exported room", "Existing room"]);
+  assert.equal(fromSingle.store.preferences.reduceMotion, true);
+
+  const edited = { ...existing, title: "Existing room, restored" };
+  const fromBackup = mergeImportedDecisions(fromSingle.store, { decisions: [edited, edited] });
+  assert.equal(fromBackup.count, 1);
+  assert.deepEqual(fromBackup.store.decisions.map((decision) => decision.title), ["Existing room, restored", "Exported room"]);
+
+  assert.throws(() => mergeImportedDecisions(store, { decisions: [] }), /No valid decisions/);
+  const full = normalizeStore({ decisions: Array.from({ length: MAX_DECISIONS }, (_, index) => createDecision({ title: `Room ${index}` })) });
+  assert.throws(() => mergeImportedDecisions(full, { decision: single }), /room limit/);
+});
+
+test("calendar dates use the local day rather than the UTC day", () => {
+  assert.equal(localDateOnly(new Date(2026, 0, 5, 0, 30)), "2026-01-05");
+  assert.equal(localDateOnly(new Date(2026, 11, 31, 23, 59)), "2026-12-31");
 });
 
 test("duplicate creates a fresh room without commitment, analysis, or chat", () => {

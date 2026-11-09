@@ -194,6 +194,36 @@ test("library search, duplication, export, and settings are usable", async ({ pa
   await expect(frame.getByRole("button", { name: /Export all data/ })).toBeVisible();
 });
 
+test("risk scores stay on the 1-5 scale and a single-room import keeps the library", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const frame = await openRoom(page);
+  await createCareerDecision(frame);
+
+  await frame.getByRole("link", { name: /Challenge/ }).last().click();
+  const likelihood = frame.locator('[data-risk-field="likelihood"]').first();
+  await likelihood.fill("9");
+  await likelihood.blur();
+  await expect(likelihood).toHaveValue("5");
+  await likelihood.fill("");
+  await likelihood.blur();
+  await expect(likelihood).toHaveValue("5");
+
+  await frame.getByRole("link", { name: /All decisions/ }).click();
+  await frame.getByRole("link", { name: "Settings" }).click();
+  const singleRoomExport = {
+    app: "Decision Room AI",
+    version: 1,
+    decision: { id: "imported-room", title: "Imported hiring decision", options: [{ id: "a", name: "Hire now" }, { id: "b", name: "Wait a quarter" }] },
+  };
+  await frame.locator("#import-data").setInputFiles({ name: "room.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(singleRoomExport)) });
+  await expect(frame.getByText(/1 decision room imported/)).toBeVisible();
+  await expect(frame.locator(".decision-row")).toHaveCount(2);
+  await expect(frame.getByRole("heading", { name: "Imported hiring decision" })).toBeVisible();
+  await expect(frame.getByRole("heading", { name: "Should I accept the product lead offer?" })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test("Anna Storage restores an in-progress room after reopen", async ({ page }) => {
   const frame = await openRoom(page);
   await frame.getByRole("link", { name: /Open a new room/ }).click();

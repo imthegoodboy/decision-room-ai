@@ -25,6 +25,8 @@ import {
   normalizeStore,
   parseStructuredJson,
   isAnalysisPayload,
+  localDateOnly,
+  mergeImportedDecisions,
   sensitivityAnalysis,
 } from "./core.js";
 import { icon } from "./icons.js";
@@ -508,7 +510,7 @@ function renderCommit(decision) {
 function defaultReviewDate() {
   const date = new Date();
   date.setDate(date.getDate() + 30);
-  return date.toISOString().slice(0, 10);
+  return localDateOnly(date);
 }
 
 function renderReview(decision) {
@@ -547,7 +549,7 @@ function renderReport(decision) {
 function renderSettings() {
   return shell(`<div class="page page--settings"><header class="settings-header reveal"><p class="eyebrow">Settings & data</p><h1>A quiet place for<br><em>the practical things.</em></h1><p>Control local behavior and keep a portable copy of your decision practice.</p></header>
     <section class="settings-grid reveal"><article class="settings-section"><p class="eyebrow">Experience</p><h2>Motion and density</h2><label class="setting-row"><span><strong>Reduce motion</strong><small>Keep transitions minimal inside this app.</small></span><input type="checkbox" id="reduce-motion" ${state.store.preferences.reduceMotion ? "checked" : ""}></label><label class="setting-row"><span><strong>Compact comparison</strong><small>Use a tighter matrix when many criteria are present.</small></span><input type="checkbox" id="compact-matrix" ${state.store.preferences.compactMatrix ? "checked" : ""}></label></article>
-      <article class="settings-section"><p class="eyebrow">Data portability</p><h2>Keep your own copy</h2><p>Export all rooms as JSON or restore a previously exported Decision Room file.</p><div class="settings-actions"><button class="button button--quiet" type="button" data-action="export-all">${icon("download")} Export all data</button><label class="button button--quiet file-button">${icon("plus")} Import data<input id="import-data" type="file" accept="application/json,.json"></label></div></article>
+      <article class="settings-section"><p class="eyebrow">Data portability</p><h2>Keep your own copy</h2><p>Export all rooms as JSON, or import a backup or single-room export. Imported rooms are added to your library; existing rooms are kept.</p><div class="settings-actions"><button class="button button--quiet" type="button" data-action="export-all">${icon("download")} Export all data</button><label class="button button--quiet file-button">${icon("plus")} Import data<input id="import-data" type="file" accept="application/json,.json"></label></div></article>
       <article class="settings-section settings-section--danger"><p class="eyebrow">Reset</p><h2>Clear every room</h2><p>This permanently removes all Decision Room AI data from ${state.platform.storageMode === "anna" ? "Anna Storage" : "this browser"}.</p><button class="button button--danger" type="button" data-action="clear-all">${icon("trash")} Clear all data</button></article>
       <aside class="storage-note"><span class="storage-orb"></span><div><strong>${state.platform.storageMode === "anna" ? "Anna Storage connected" : "Standalone device preview"}</strong><p>${state.platform.storageMode === "anna" ? "Your decision library follows your signed-in Anna account." : "Open the app inside Anna to sync decisions across sessions."}</p></div></aside>
     </section></div>`);
@@ -954,7 +956,12 @@ app.addEventListener("input", (event) => {
   const riskField = target.dataset.riskField;
   if (riskField) {
     const item = decision.risks.find((entry) => entry.id === target.dataset.id);
-    if (item) { item[riskField] = ["likelihood", "impact"].includes(riskField) ? Number(target.value) : target.value.slice(0, 500); touch(decision); }
+    if (item && ["likelihood", "impact"].includes(riskField)) {
+      // Typing bypasses min/max, and a cleared field reads as 0; keep the stored value on the 1–5 scale.
+      if (target.value === "") return;
+      item[riskField] = Math.min(5, Math.max(1, Math.round(Number(target.value)) || 1));
+      touch(decision);
+    } else if (item) { item[riskField] = target.value.slice(0, 500); touch(decision); }
   }
 });
 
@@ -974,16 +981,18 @@ app.addEventListener("change", (event) => {
     render();
   } else if (target.hasAttribute("data-rating") || target.dataset.criterionField === "weight") {
     render();
+  } else if (target.dataset.riskField === "likelihood" || target.dataset.riskField === "impact") {
+    const item = activeDecision()?.risks.find((entry) => entry.id === target.dataset.id);
+    if (item) target.value = String(item[target.dataset.riskField]);
   } else if (target.id === "import-data" && target.files?.[0]) {
     target.files[0].text().then(async (text) => {
       try {
-        const imported = normalizeStore(JSON.parse(text));
-        if (!imported.decisions.length) throw new Error("No valid decisions were found in this file.");
-        state.store = imported;
+        const { store, count } = mergeImportedDecisions(state.store, JSON.parse(text));
+        state.store = store;
         await saveNow();
         location.hash = "#/home";
         render();
-        toast(`${imported.decisions.length} decision room${imported.decisions.length === 1 ? "" : "s"} imported.`, "success");
+        toast(`${count} decision room${count === 1 ? "" : "s"} imported. Your existing rooms were kept.`, "success");
       } catch (error) {
         toast(error?.message || "This file could not be imported.", "error");
       }
@@ -1065,7 +1074,7 @@ window.addEventListener("keydown", (event) => {
     modalRoot.hidden = true;
     modalRoot.innerHTML = "";
   }
-  if (event.key === "Enter" && event.ctrlKey && document.activeElement?.id === "coach-input") {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && document.activeElement?.id === "coach-input") {
     event.preventDefault();
     document.getElementById("coach-form")?.requestSubmit();
   }

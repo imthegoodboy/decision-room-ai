@@ -14,10 +14,15 @@ var dateOnly = (value) => {
   const parsed = /* @__PURE__ */ new Date(`${candidate}T00:00:00Z`);
   return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== candidate ? "" : candidate;
 };
+var localDateOnly = (date) => [
+  date.getFullYear(),
+  String(date.getMonth() + 1).padStart(2, "0"),
+  String(date.getDate()).padStart(2, "0")
+].join("-");
 function addDays(date, days) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
-  return next.toISOString().slice(0, 10);
+  return localDateOnly(next);
 }
 function createId(prefix = "item") {
   const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -282,6 +287,17 @@ function normalizeStore(raw) {
     }
   };
 }
+function mergeImportedDecisions(store, raw) {
+  const payload = raw?.decision && !Array.isArray(raw?.decisions) ? { decisions: [raw.decision] } : raw;
+  const imported = [...new Map(normalizeStore(payload).decisions.map((decision) => [decision.id, decision])).values()];
+  if (!imported.length) throw new Error("No valid decisions were found in this file.");
+  const importedIds = new Set(imported.map((decision) => decision.id));
+  const decisions = [...imported, ...store.decisions.filter((decision) => !importedIds.has(decision.id))];
+  if (decisions.length > MAX_DECISIONS) {
+    throw new Error(`Importing this file would exceed the ${MAX_DECISIONS}-room limit. Export or delete older rooms first.`);
+  }
+  return { store: { ...store, decisions }, count: imported.length };
+}
 function inferredOptions(decision) {
   const source = cleanLong(decision.title, 500);
   const title = clean(source.split(/[?!]/)[0], 140).replace(/^\s*(?:should|shall|could|can|do|does|did|would)\s+(?:i|we)\s+/i, "").replace(/^\s*whether\s+(?:i|we)\s+/i, "").replace(/[?!.]+$/, "");
@@ -487,7 +503,7 @@ function buildDecisionDraftPrompt(decision, now = /* @__PURE__ */ new Date()) {
     "Use only the supplied context; do not invent external facts. Keep every string under 14 words and the visible response under 1200 tokens.",
     "Return one minified JSON object only. Use this compact schema (array indexes in s, r, and m refer to o and c):",
     JSON.stringify({ d: "YYYY-MM-DD", o: [["option", "note"]], c: [["criterion", 25, "why it matters"]], s: [[0, 0, 3, "score reason"]], a: [["assumption", 3, "evidence or test"]], r: [[0, "risk", 3, 4, "mitigation"]], p: [["failure cause", "early warning", "mitigation"]], q: ["question"], m: [0, 3, "conditional rationale", "next action"], why: "brief overview" }),
-    `TODAY: ${now.toISOString().slice(0, 10)}`,
+    `TODAY: ${localDateOnly(now)}`,
     `DECISION QUESTION: ${decision.title}`,
     `CONTEXT: ${decision.context || "No additional context was supplied."}`,
     `STARTER SHAPE (use only as a fallback, improve it when the context supports doing so): ${JSON.stringify({ options: fallback.options.map((item) => item.name), criteria: fallback.criteria.map((item) => item.name) })}`
@@ -1655,7 +1671,7 @@ function renderCommit(decision) {
 function defaultReviewDate() {
   const date = /* @__PURE__ */ new Date();
   date.setDate(date.getDate() + 30);
-  return date.toISOString().slice(0, 10);
+  return localDateOnly(date);
 }
 function renderReview(decision) {
   const commitment = decision.commitment;
@@ -1691,7 +1707,7 @@ function renderReport(decision) {
 function renderSettings() {
   return shell(`<div class="page page--settings"><header class="settings-header reveal"><p class="eyebrow">Settings & data</p><h1>A quiet place for<br><em>the practical things.</em></h1><p>Control local behavior and keep a portable copy of your decision practice.</p></header>
     <section class="settings-grid reveal"><article class="settings-section"><p class="eyebrow">Experience</p><h2>Motion and density</h2><label class="setting-row"><span><strong>Reduce motion</strong><small>Keep transitions minimal inside this app.</small></span><input type="checkbox" id="reduce-motion" ${state.store.preferences.reduceMotion ? "checked" : ""}></label><label class="setting-row"><span><strong>Compact comparison</strong><small>Use a tighter matrix when many criteria are present.</small></span><input type="checkbox" id="compact-matrix" ${state.store.preferences.compactMatrix ? "checked" : ""}></label></article>
-      <article class="settings-section"><p class="eyebrow">Data portability</p><h2>Keep your own copy</h2><p>Export all rooms as JSON or restore a previously exported Decision Room file.</p><div class="settings-actions"><button class="button button--quiet" type="button" data-action="export-all">${icon("download")} Export all data</button><label class="button button--quiet file-button">${icon("plus")} Import data<input id="import-data" type="file" accept="application/json,.json"></label></div></article>
+      <article class="settings-section"><p class="eyebrow">Data portability</p><h2>Keep your own copy</h2><p>Export all rooms as JSON, or import a backup or single-room export. Imported rooms are added to your library; existing rooms are kept.</p><div class="settings-actions"><button class="button button--quiet" type="button" data-action="export-all">${icon("download")} Export all data</button><label class="button button--quiet file-button">${icon("plus")} Import data<input id="import-data" type="file" accept="application/json,.json"></label></div></article>
       <article class="settings-section settings-section--danger"><p class="eyebrow">Reset</p><h2>Clear every room</h2><p>This permanently removes all Decision Room AI data from ${state.platform.storageMode === "anna" ? "Anna Storage" : "this browser"}.</p><button class="button button--danger" type="button" data-action="clear-all">${icon("trash")} Clear all data</button></article>
       <aside class="storage-note"><span class="storage-orb"></span><div><strong>${state.platform.storageMode === "anna" ? "Anna Storage connected" : "Standalone device preview"}</strong><p>${state.platform.storageMode === "anna" ? "Your decision library follows your signed-in Anna account." : "Open the app inside Anna to sync decisions across sessions."}</p></div></aside>
     </section></div>`);
@@ -2092,8 +2108,12 @@ app.addEventListener("input", (event) => {
   const riskField = target.dataset.riskField;
   if (riskField) {
     const item = decision.risks.find((entry) => entry.id === target.dataset.id);
-    if (item) {
-      item[riskField] = ["likelihood", "impact"].includes(riskField) ? Number(target.value) : target.value.slice(0, 500);
+    if (item && ["likelihood", "impact"].includes(riskField)) {
+      if (target.value === "") return;
+      item[riskField] = Math.min(5, Math.max(1, Math.round(Number(target.value)) || 1));
+      touch(decision);
+    } else if (item) {
+      item[riskField] = target.value.slice(0, 500);
       touch(decision);
     }
   }
@@ -2114,16 +2134,18 @@ app.addEventListener("change", (event) => {
     render();
   } else if (target.hasAttribute("data-rating") || target.dataset.criterionField === "weight") {
     render();
+  } else if (target.dataset.riskField === "likelihood" || target.dataset.riskField === "impact") {
+    const item = activeDecision()?.risks.find((entry) => entry.id === target.dataset.id);
+    if (item) target.value = String(item[target.dataset.riskField]);
   } else if (target.id === "import-data" && target.files?.[0]) {
     target.files[0].text().then(async (text) => {
       try {
-        const imported = normalizeStore(JSON.parse(text));
-        if (!imported.decisions.length) throw new Error("No valid decisions were found in this file.");
-        state.store = imported;
+        const { store, count } = mergeImportedDecisions(state.store, JSON.parse(text));
+        state.store = store;
         await saveNow();
         location.hash = "#/home";
         render();
-        toast(`${imported.decisions.length} decision room${imported.decisions.length === 1 ? "" : "s"} imported.`, "success");
+        toast(`${count} decision room${count === 1 ? "" : "s"} imported. Your existing rooms were kept.`, "success");
       } catch (error) {
         toast(error?.message || "This file could not be imported.", "error");
       }
@@ -2236,7 +2258,7 @@ window.addEventListener("keydown", (event) => {
     modalRoot.hidden = true;
     modalRoot.innerHTML = "";
   }
-  if (event.key === "Enter" && event.ctrlKey && document.activeElement?.id === "coach-input") {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && document.activeElement?.id === "coach-input") {
     event.preventDefault();
     document.getElementById("coach-form")?.requestSubmit();
   }
